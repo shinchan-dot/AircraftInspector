@@ -70,6 +70,14 @@ namespace SaccFlightAndVehicles
 
             localPlayer = Networking.LocalPlayer;
         }
+
+        //==AircraftInspector==
+        public void ReAdjustValues()
+        {
+            SeaLevel = (float)SAVControl.GetProgramVariable("SeaLevel");
+        }
+        //==AircraftInspector==
+
         private void OnEnable()
         {
             maxGs = 0f;

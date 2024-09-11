@@ -100,6 +100,16 @@ namespace SaccFlightAndVehicles
             if (NoGearFunction)
             { GearDown = true; }
         }
+
+        //==AircraftInspector==
+        public void ReAdjustValues()
+        {
+            FullHealthDivider = 1f / (float)SAVControl.GetProgramVariable("Health");
+            float fuel = (float)SAVControl.GetProgramVariable("Fuel");
+            FullFuelDivider = 1f / (fuel > 0 ? fuel : 10000000);
+        }
+        //==AircraftInspector==
+
         private void Update()
         {
             if (DoEffects > 10) { return; }

@@ -451,6 +451,11 @@ namespace SaccFlightAndVehicles
 
         private float[] initSuspensionDistance;
         private float[] initTargetPosition;
+        //==AircraftInspector==
+        private float[] initWheelMass;
+        private float[] initSuspensionSpring;
+        private float[] initSuspensionDamper;
+        //==AircraftInspector==
 
         [System.NonSerializedAttribute] public bool LowFuelLastFrame;
         [System.NonSerializedAttribute] public bool NoFuelLastFrame;
@@ -666,12 +671,22 @@ namespace SaccFlightAndVehicles
 
                 initSuspensionDistance = new float[VehicleWheelColliders.Length];
                 initTargetPosition = new float[VehicleWheelColliders.Length];
+                //==AircraftInspector==
+                initWheelMass = new float[VehicleWheelColliders.Length];
+                initSuspensionSpring = new float[VehicleWheelColliders.Length];
+                initSuspensionDamper = new float[VehicleWheelColliders.Length];
+                //==AircraftInspector==
 
                 for (int wheelIndex = 0; wheelIndex < VehicleWheelColliders.Length; wheelIndex++)
                 {
                     WheelCollider wheel = VehicleWheelColliders[wheelIndex];
                     initSuspensionDistance[wheelIndex] = wheel.suspensionDistance;
                     initTargetPosition[wheelIndex] = wheel.suspensionSpring.targetPosition;
+                    //==AircraftInspector==
+                    initWheelMass[wheelIndex] = wheel.mass;
+                    initSuspensionSpring[wheelIndex] = wheel.suspensionSpring.spring;
+                    initSuspensionDamper[wheelIndex] = wheel.suspensionSpring.damper;
+                    //==AircraftInspector==
                 }
             }
 
@@ -781,6 +796,106 @@ namespace SaccFlightAndVehicles
             if (!ControlsRoot)
             { ControlsRoot = VehicleTransform; }
         }
+
+        //==AircraftInspector==
+        public void ReAdjustValues()
+        {
+            if (AutoAdjustValuesToMass)
+            {
+                //values that should feel the same no matter the weight of the aircraft
+                float RBMass = VehicleRigidbody.mass;
+                ThrottleStrength *= RBMass;
+                PitchStrength *= RBMass;
+                PitchFriction *= RBMass;
+                PitchConstantFriction *= RBMass;
+                YawStrength *= RBMass;
+                YawFriction *= RBMass;
+                YawConstantFriction *= RBMass;
+                RollStrength *= RBMass;
+                RollFriction *= RBMass;
+                RollConstantFriction *= RBMass;
+                VelStraightenStrPitch *= RBMass;
+                VelStraightenStrYaw *= RBMass;
+                YawAoaRollForceMulti *= RBMass;
+                PitchAoaPitchForceMulti *= RBMass;
+                Lift *= RBMass;
+                MaxLift *= RBMass;
+                VelLiftMax *= RBMass;
+                AdverseRoll *= RBMass;
+                AdverseYaw *= RBMass;
+                GroundEffectLiftMax *= RBMass;
+                for (int wheelIndex = 0; wheelIndex < VehicleWheelColliders.Length; wheelIndex++)
+                {
+                    WheelCollider wheel = VehicleWheelColliders[wheelIndex];
+                    wheel.mass = initWheelMass[wheelIndex] * RBMass;
+                    JointSpring SusiSpring = wheel.suspensionSpring;
+                    SusiSpring.spring = initSuspensionSpring[wheelIndex] * RBMass;
+                    SusiSpring.damper = initSuspensionDamper[wheelIndex] * RBMass;
+                    wheel.suspensionSpring = SusiSpring;
+
+                }
+            }
+            FullHealth = Health;
+            FullFuel = Fuel;
+
+            VelLiftMaxStart = VelLiftMax;
+            VelLiftStart = VelLift;
+
+            PitchThrustVecMultiStart = PitchThrustVecMulti;
+            YawThrustVecMultiStart = YawThrustVecMulti;
+            RollThrustVecMultiStart = RollThrustVecMulti;
+
+            if (AtmosphereThinningStart > AtmosphereThinningEnd) { AtmosphereThinningEnd = (AtmosphereThinningStart + 1); }
+            AtmoshpereFadeDistance = (AtmosphereThinningEnd + SeaLevel) - (AtmosphereThinningStart + SeaLevel); //for finding atmosphere thinning gradient
+            AtmosphereHeightThing = (AtmosphereThinningStart + SeaLevel) / (AtmoshpereFadeDistance); //used to add back the height to the atmosphere after finding gradient
+
+            //used to set each rotation axis' reversing behaviour to inverted if 0 thrust vectoring, and not inverted if thrust vectoring is non-zero.
+            //the variables are called 'Zero' because they ask if thrustvec is set to 0.
+            if (VTOLOnly)//Never do this for heli-like vehicles
+            {
+                ReversingPitchStrengthZero = 1;
+                ReversingYawStrengthZero = 1;
+                ReversingRollStrengthZero = 1;
+                ReversingPitchStrengthZeroStart = 1;
+                ReversingYawStrengthZeroStart = 1;
+                ReversingRollStrengthZeroStart = 1;
+            }
+            else
+            {
+                ReversingPitchStrengthZeroStart = ReversingPitchStrengthZero = PitchThrustVecMulti == 0 ? -ReversingPitchStrengthMulti : 1;
+                ReversingYawStrengthZeroStart = ReversingYawStrengthZero = YawThrustVecMulti == 0 ? -ReversingYawStrengthMulti : 1;
+                ReversingRollStrengthZeroStart = ReversingRollStrengthZero = RollThrustVecMulti == 0 ? -ReversingRollStrengthMulti : 1;
+            }
+
+            if (VTOLOnly) { VTOLenabled = true; }
+            VTOL360 = VTOLMinAngle == 0f && VTOLMaxAngle == 360f;
+
+            if (!HasAfterburner) { ThrottleAfterburnerPoint = 1; }
+            ThrottleNormalizer = 1 / ThrottleAfterburnerPoint;
+            ABNormalizer = 1 / (1 - ThrottleAfterburnerPoint);
+
+            FuelConsumptionAB = (FuelConsumption * FuelConsumptionABMulti) - FuelConsumption;
+            ThrottleStrengthAB = (ThrottleStrength * AfterburnerThrustMulti) - ThrottleStrength;
+
+            vtolangledif = VTOLMaxAngle - VTOLMinAngle;
+            VTOLAngleDivider = VTOLAngleTurnRate / vtolangledif;
+            VTOLAngle = VTOLAngleInput = VTOLDefaultValue;
+            VTOLAngleDegrees = VTOLMinAngle + (vtolangledif * VTOLAngle);
+
+            TakeOff(); //GroundedLastFrame‚È‚Ç‚ðƒŠƒZƒbƒg‚·‚é
+            DisableGroundDetection_ = 0;
+            if (GroundDetectorRayDistance == 0 || !GroundDetector)
+            { DisableGroundDetection_++; }
+
+            LowFuelDivider = 1 / LowFuel;
+
+            if (DisallowTaxiRotationWhileStill)
+            {
+                TaxiFullTurningSpeedDivider = 1 / TaxiFullTurningSpeed;
+            }
+        }
+        //==AircraftInspector==
+
         private void LateUpdate()
         {
             float DeltaTime = Time.deltaTime;
