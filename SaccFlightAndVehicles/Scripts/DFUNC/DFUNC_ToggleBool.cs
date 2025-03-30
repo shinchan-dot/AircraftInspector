@@ -14,8 +14,15 @@ namespace SaccFlightAndVehicles
         public Animator BoolAnimator;
         [Tooltip("Object enabled when function is active (used on MFD)")]
         public GameObject[] Dial_Funcon;
-        public bool DoAnimBool = true;
-        public string AnimBoolName = "AnimBool";
+        [SerializeField] private bool InvertFuncon = false;
+        [Tooltip("If on a pickup: Use VRChat's OnPickupUseDown functionality")]
+        [SerializeField] bool use_OnPickupUseDown = false;
+        [Tooltip("Enable while holding trigger and disable when let go? (REQUIRES using ToggleWhileHeldKey instead of KeyboardInput script to use)")]
+        [SerializeField] bool ToggleWhileHeld;
+        [Tooltip("REQUIRED FOR ToggleWhileHeld MODE (as opposed to using KeyboardInput.cs)")]
+        [SerializeField] KeyCode ToggleWhileHeldKey;
+        bool DoAnimBool = false;
+        public string AnimBoolName = string.Empty;
         public bool OnDefault = false;
         [Tooltip("Set toggle to off when exiting?")]
         public bool PilotExitTurnOff = true;
@@ -37,27 +44,44 @@ namespace SaccFlightAndVehicles
         public bool AllowToggleGrounded = true;
         [Tooltip("Only for SeaPlanes/Vehicles with floatscript")]
         public bool AllowToggleOnWater = true;
+        [Tooltip("Prevent/turn off when in afterburner")]
+        public bool AllowAfterBurner = true;
+        [Tooltip("Prevent/turn engine is off")]
+        public bool AllowToggleEngineOff = true;
+        [Tooltip("Prevent/turn engine is on")]
+        public bool AllowToggleEngineOn = true;
         [Tooltip("Send Events to sound script for opening a door?")]
         [Space(10)]
         public bool OpensDoor = false;
         [Header("Door Only:")]
-        [Tooltip("If this toggle opens a door, it will change the sound to the outside sounds using the soundcontroller")]
-        public UdonSharpBehaviour SoundControl;
+        private UdonSharpBehaviour SoundControl;
         [Tooltip("How long it takes for the sound to change after toggle to closed")]
         public float DoorCloseTime = 2;
+        [Tooltip("How long it takes for the sound to change after toggle to open")]
+        public float DoorOpenTime = 0;
+        [Tooltip("Leave empty to effect all seats")]
+        public SaccVehicleSeat[] EffectedSeats;
         [System.NonSerializedAttribute] public bool AnimOn = false;
         [System.NonSerializedAttribute] public float ToggleTime;
+        [System.NonSerializedAttribute] public bool LeftDial = false;
+        [System.NonSerializedAttribute] public int DialPosition = -999;
+        [System.NonSerializedAttribute] public SaccEntity EntityControl;
+        [System.NonSerializedAttribute] public SAV_PassengerFunctionsController PassengerFunctionsControl;
         private ParticleSystem.EmissionModule[] ToggleEmission_em;
         private int ParticleLength;
         private bool ToggleAllowed = true;
-        private bool UseLeftTrigger = false;
         private bool TriggerLastFrame;
-        private bool sound_DoorOpen;
         private bool IsSecondary = false;
-        public void DFUNC_LeftDial() { UseLeftTrigger = true; }
-        public void DFUNC_RightDial() { UseLeftTrigger = false; }
         public void SFEXT_L_EntityStart()
         {
+            SoundControl = EntityControl.GetExtention(GetUdonTypeName<SAV_SoundController>());
+            ParticleLength = ToggleEmission.Length;
+            ToggleEmission_em = new ParticleSystem.EmissionModule[ParticleLength];
+            for (int i = 0; i < ParticleLength; i++)
+            { ToggleEmission_em[i] = ToggleEmission[i].emission; }
+            if (AnimBoolName.Length > 0) DoAnimBool = true;
+            if (!SoundControl)
+                SoundControl = EntityControl.GetExtention(GetUdonTypeName<SGV_EffectsController>());
             if (MasterToggle)//this object is slave
             {
                 IsSecondary = true;
@@ -65,18 +89,14 @@ namespace SaccFlightAndVehicles
             }
             else//this object is master
             {
-                if (OpensDoor && (ToggleMinDelay < DoorCloseTime)) { ToggleMinDelay = DoorCloseTime; }
+                if (OpensDoor && (ToggleMinDelay < DoorCloseTime) || (ToggleMinDelay < DoorOpenTime)) { ToggleMinDelay = Mathf.Max(DoorCloseTime, DoorOpenTime); }
                 if (OnDefault)
                 {
                     SetBoolOn();
                 }
                 foreach (GameObject funcon in Dial_Funcon)
-                { funcon.SetActive(OnDefault); }
+                { funcon.SetActive(InvertFuncon ? !OnDefault : OnDefault); }
             }
-            ParticleLength = ToggleEmission.Length;
-            ToggleEmission_em = new ParticleSystem.EmissionModule[ParticleLength];
-            for (int i = 0; i < ParticleLength; i++)
-            { ToggleEmission_em[i] = ToggleEmission[i].emission; }
         }
         public void SFEXT_O_OnPlayerJoined()
         {
@@ -90,42 +110,69 @@ namespace SaccFlightAndVehicles
         }
         public void DFUNC_Selected()
         {
-            TriggerLastFrame = true;
-            gameObject.SetActive(true);
+            if (EntityControl.InVR || ToggleWhileHeld)
+            {
+                TriggerLastFrame = true;
+                gameObject.SetActive(true);
+            }
         }
         public void DFUNC_Deselected()
         {
-            gameObject.SetActive(false);
+            if (!ToggleWhileHeld || EntityControl.InVR)
+            {
+                PickupTrigger = 0;
+                gameObject.SetActive(false);
+                if (ToggleWhileHeld)
+                {
+                    if (AnimOn)
+                    {
+                        Toggle();
+                    }
+                }
+            }
         }
-        public void SFEXT_O_PilotEnter()
+        public void SFEXT_G_PilotEnter()
         {
             if (!IsSecondary)
             {
                 if (PilotEnterTurnOff)
                 {
                     if (AnimOn)
-                    { SendCustomNetworkEvent(VRC.Udon.Common.Interfaces.NetworkEventTarget.All, nameof(SetBoolOff)); }
+                    { SetBoolOff(); }
                 }
                 if (PilotEnterTurnOn)
                 {
                     if (!AnimOn)
-                    { SendCustomNetworkEvent(VRC.Udon.Common.Interfaces.NetworkEventTarget.All, nameof(SetBoolOn)); }
+                    { SetBoolOn(); }
                 }
             }
         }
+        public void SFEXT_O_PilotEnter()
+        {
+            if (ToggleWhileHeld && !EntityControl.InVR)
+            {
+                TriggerLastFrame = true;
+                gameObject.SetActive(true);
+            }
+        }
         public void SFEXT_O_PilotExit()
+        {
+            gameObject.SetActive(false);
+            PickupTrigger = 0;
+        }
+        public void SFEXT_G_PilotExit()
         {
             if (!IsSecondary)
             {
                 if (PilotExitTurnOn)
                 {
                     if (!AnimOn)
-                    { SendCustomNetworkEvent(VRC.Udon.Common.Interfaces.NetworkEventTarget.All, nameof(SetBoolOn)); }
+                    { SetBoolOn(); }
                 }
-                if (PilotExitTurnOff)
+                if (PilotExitTurnOff || ToggleWhileHeld)
                 {
                     if (AnimOn)
-                    { SendCustomNetworkEvent(VRC.Udon.Common.Interfaces.NetworkEventTarget.All, nameof(SetBoolOff)); }
+                    { SetBoolOff(); }
                 }
             }
             gameObject.SetActive(false);
@@ -148,11 +195,16 @@ namespace SaccFlightAndVehicles
         private void Update()
         {
             float Trigger;
-            if (UseLeftTrigger)
-            { Trigger = Input.GetAxisRaw("Oculus_CrossPlatform_PrimaryIndexTrigger"); }
+            if (use_OnPickupUseDown)
+                Trigger = PickupTrigger;
             else
-            { Trigger = Input.GetAxisRaw("Oculus_CrossPlatform_SecondaryIndexTrigger"); }
-            if (Trigger > 0.75)
+            {
+                if (LeftDial)
+                { Trigger = Input.GetAxisRaw("Oculus_CrossPlatform_PrimaryIndexTrigger"); }
+                else
+                { Trigger = Input.GetAxisRaw("Oculus_CrossPlatform_SecondaryIndexTrigger"); }
+            }
+            if (Trigger > 0.75 || Input.GetKey(ToggleWhileHeldKey))
             {
                 if (!TriggerLastFrame)
                 {
@@ -161,9 +213,22 @@ namespace SaccFlightAndVehicles
                 }
                 TriggerLastFrame = true;
             }
-            else { TriggerLastFrame = false; }
+            else
+            {
+                if (TriggerLastFrame)
+                {
+                    if (ToggleWhileHeld)
+                    {
+                        if (AnimOn)
+                        {
+                            Toggle();
+                        }
+                    }
+                    TriggerLastFrame = false;
+                }
+            }
         }
-        private void Toggle()
+        public void Toggle()
         {
             if (IsSecondary)
             {
@@ -197,9 +262,26 @@ namespace SaccFlightAndVehicles
             AnimOn = true;
             if (DoAnimBool && BoolAnimator) { BoolAnimator.SetBool(AnimBoolName, true); }
             foreach (GameObject funcon in Dial_Funcon)
-            { funcon.SetActive(true); }
+            { funcon.SetActive(InvertFuncon ? !true : true); }
             if (OpensDoor)
-            { SoundControl.SendCustomEvent("DoorOpen"); }
+            {
+                if (EffectedSeats.Length == 0)
+                {
+                    for (int i = 0; i < EntityControl.VehicleSeats.Length; i++)
+                    {
+                        EntityControl.VehicleSeats[i].SetProgramVariable("numOpenDoors", (int)EntityControl.VehicleSeats[i].GetProgramVariable("numOpenDoors") + 1);
+                    }
+                    SoundControl.SendCustomEventDelayedSeconds("UpdateDoorsOpen", DoorOpenTime);
+                }
+                else
+                {
+                    for (int i = 0; i < EffectedSeats.Length; i++)
+                    {
+                        EffectedSeats[i].SetProgramVariable("numOpenDoors", (int)EffectedSeats[i].GetProgramVariable("numOpenDoors") + 1);
+                    }
+                    SoundControl.SendCustomEventDelayedSeconds("UpdateDoorsOpen", DoorOpenTime);
+                }
+            }
             foreach (GameObject obj in ToggleObjects)
             { obj.SetActive(true); }
             foreach (GameObject obj in ToggleObjects_Off)
@@ -214,9 +296,26 @@ namespace SaccFlightAndVehicles
             AnimOn = false;
             if (DoAnimBool && BoolAnimator) { BoolAnimator.SetBool(AnimBoolName, false); }
             foreach (GameObject funcon in Dial_Funcon)
-            { funcon.SetActive(false); }
+            { funcon.SetActive(InvertFuncon ? !false : false); }
             if (OpensDoor)
-            { SoundControl.SendCustomEventDelayedSeconds("DoorClose", DoorCloseTime); }
+            {
+                if (EffectedSeats.Length == 0)
+                {
+                    for (int i = 0; i < EntityControl.VehicleSeats.Length; i++)
+                    {
+                        EntityControl.VehicleSeats[i].SetProgramVariable("numOpenDoors", (int)EntityControl.VehicleSeats[i].GetProgramVariable("numOpenDoors") - 1);
+                    }
+                    SoundControl.SendCustomEventDelayedSeconds("UpdateDoorsOpen", DoorCloseTime);
+                }
+                else
+                {
+                    for (int i = 0; i < EffectedSeats.Length; i++)
+                    {
+                        EffectedSeats[i].SetProgramVariable("numOpenDoors", (int)EffectedSeats[i].GetProgramVariable("numOpenDoors") - 1);
+                    }
+                    SoundControl.SendCustomEventDelayedSeconds("UpdateDoorsOpen", DoorCloseTime);
+                }
+            }
             foreach (GameObject obj in ToggleObjects)
             { obj.SetActive(false); }
             foreach (GameObject obj in ToggleObjects_Off)
@@ -229,34 +328,91 @@ namespace SaccFlightAndVehicles
             if (!IsSecondary)
             {
                 if (!OnDefault && AnimOn)
-                { SendCustomNetworkEvent(VRC.Udon.Common.Interfaces.NetworkEventTarget.All, nameof(SetBoolOff)); }
+                { SetBoolOff(); }
                 else if (OnDefault && !AnimOn)
-                { SendCustomNetworkEvent(VRC.Udon.Common.Interfaces.NetworkEventTarget.All, nameof(SetBoolOn)); }
+                { SetBoolOn(); }
             }
         }
+        private bool InAir;
+        private bool OnWater;
         public void SFEXT_G_TakeOff()
         {
-            ToggleAllowed = AllowToggleFlying;
-            if (AnimOn && !AllowToggleFlying)
-            { Toggle(); }
+            InAir = true;
+            OnWater = false;
+            CheckToggleAllowed();
         }
         public void SFEXT_G_TouchDown()
         {
-            ToggleAllowed = AllowToggleGrounded;
-            if (AnimOn && !AllowToggleGrounded)
-            { Toggle(); }
+            InAir = false;
+            OnWater = false;
+            CheckToggleAllowed();
         }
         public void SFEXT_G_TouchDownWater()
         {
-            ToggleAllowed = AllowToggleOnWater;
-            if (AnimOn && !AllowToggleOnWater)
-            { Toggle(); }
+            InAir = false;
+            OnWater = true;
+            CheckToggleAllowed();
         }
-        public override void OnOwnershipTransferred(VRCPlayerApi player)
+        private void CheckToggleAllowed()
+        {
+            ToggleAllowed =
+                    (AllowToggleFlying || !InAir)
+                && (AllowAfterBurner || !ABOn)
+                && (AllowToggleGrounded || InAir)
+                && (AllowToggleOnWater || !OnWater)
+                && (AllowToggleEngineOff || EngineOn)
+                && (AllowToggleEngineOn || !EngineOn)
+            ;
+            if (!MasterToggle && AnimOn && !ToggleAllowed)
+            { ToggleWhenPossible(); }
+        }
+        private void ToggleWhenPossible()
+        {
+            if (Time.time - ToggleTime > ToggleMinDelay)
+            { Toggle(); }
+            else
+            { SendCustomEventDelayedSeconds(nameof(Toggle), Time.time - ToggleTime + .05f); }
+        }
+        private bool ABOn;
+        public void SFEXT_G_AfterburnerOff()
+        {
+            ABOn = false;
+            CheckToggleAllowed();
+        }
+        public void SFEXT_G_AfterburnerOn()
+        {
+            ABOn = true;
+            CheckToggleAllowed();
+        }
+        private bool EngineOn;
+        public void SFEXT_G_EngineOn()
+        {
+            EngineOn = true;
+            CheckToggleAllowed();
+        }
+        public void SFEXT_G_EngineOff()
+        {
+            EngineOn = false;
+            CheckToggleAllowed();
+        }
+        public void SFEXT_O_OnPickup() { SFEXT_O_PilotEnter(); }
+        public void SFEXT_O_OnDrop() { SFEXT_O_PilotExit(); }
+        public void SFEXT_G_OnPickup() { SFEXT_G_PilotEnter(); }
+        public void SFEXT_G_OnDrop() { SFEXT_G_PilotExit(); }
+        private int PickupTrigger = 0;
+        public void SFEXT_O_OnPickupUseDown()
+        {
+            PickupTrigger = 1;
+        }
+        public void SFEXT_O_OnPickupUseUp()
+        {
+            PickupTrigger = 0;
+        }
+        public void SFEXT_O_TakeOwnership()
         {//disable if owner leaves while piloting
             if (!IsSecondary)
             {
-                if (player.isLocal)
+                if (!(EntityControl.Piloting || EntityControl.Holding))
                 {
                     if (PilotExitTurnOff)
                     {

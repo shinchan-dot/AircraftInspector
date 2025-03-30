@@ -1,0 +1,554 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!1001 &7313084586553011003
+PrefabInstance:
+  m_ObjectHideFlags: 0
+  serializedVersion: 2
+  m_Modification:
+    serializedVersion: 3
+    m_TransformParent: {fileID: 0}
+    m_Modifications:
+    - target: {fileID: 67045943456701772, guid: 5bf392b25cf9d0541b1140c84eed081e,
+        type: 3}
+      propertyPath: serializationData.Prefab
+      value: 
+      objectReference: {fileID: 67045943456701772, guid: 5bf392b25cf9d0541b1140c84eed081e,
+        type: 3}
+    - target: {fileID: 180851632466719669, guid: 5bf392b25cf9d0541b1140c84eed081e,
+        type: 3}
+      propertyPath: m_LocalPosition.x
+      value: 0.88
+      objectReference: {fileID: 0}
+    - target: {fileID: 180851632466719669, guid: 5bf392b25cf9d0541b1140c84eed081e,
+        type: 3}
+      propertyPath: m_LocalRotation.w
+      value: 0.9986295
+      objectReference: {fileID: 0}
+    - target: {fileID: 180851632466719669, guid: 5bf392b25cf9d0541b1140c84eed081e,
+        type: 3}
+      propertyPath: m_LocalRotation.z
+      value: 0.052335896
+      objectReference: {fileID: 0}
+    - target: {fileID: 180851632466719669, guid: 5bf392b25cf9d0541b1140c84eed081e,
+        type: 3}
+      propertyPath: m_LocalEulerAnglesHint.z
+      value: 6
+      objectReference: {fileID: 0}
+    - target: {fileID: 561510601717705929, guid: 5bf392b25cf9d0541b1140c84eed081e,
+        type: 3}
+      propertyPath: serializedProgramAsset
+      value: 
+      objectReference: {fileID: 11400000, guid: a71474697de683244ac1c8fe41834a21,
+        type: 2}
+    - target: {fileID: 689242002084051431, guid: 5bf392b25cf9d0541b1140c84eed081e,
+        type: 3}
+      propertyPath: m_text
+      value: 'DRIFT
+
+        MODE'
+      objectReference: {fileID: 0}
+    - target: {fileID: 809597459513178284, guid: 5bf392b25cf9d0541b1140c84eed081e,
+        type: 3}
+      propertyPath: serializationData.Prefab
+      value: 
+      objectReference: {fileID: 809597459513178284, guid: 5bf392b25cf9d0541b1140c84eed081e,
+        type: 3}
+    - target: {fileID: 902239334574039669, guid: 5bf392b25cf9d0541b1140c84eed081e,
+        type: 3}
+      propertyPath: serializationData.Prefab
+      value: 
+      objectReference: {fileID: 902239334574039669, guid: 5bf392b25cf9d0541b1140c84eed081e,
+        type: 3}
+    - target: {fileID: 1068321467119349095, guid: 5bf392b25cf9d0541b1140c84eed081e,
+        type: 3}
+      propertyPath: serializationData.Prefab
+      value: 
+      objectReference: {fileID: 1068321467119349095, guid: 5bf392b25cf9d0541b1140c84eed081e,
+        type: 3}
+    - target: {fileID: 1130654464432434932, guid: 5bf392b25cf9d0541b1140c84eed081e,
+        type: 3}
+      propertyPath: Grip
+      value: 1.4
+      objectReference: {fileID: 0}
+    - target: {fileID: 1130654464432434932, guid: 5bf392b25cf9d0541b1140c84eed081e,
+        type: 3}
+      propertyPath: LateralGrip
+      value: 1
+      objectReference: {fileID: 0}
+    - target: {fileID: 1130654464432434932, guid: 5bf392b25cf9d0541b1140c84eed081e,
+        type: 3}
+      propertyPath: EngineInfluence
+      value: 25000
+      objectReference: {fileID: 0}
+    - target: {fileID: 1130654464432434932, guid: 5bf392b25cf9d0541b1140c84eed081e,
+        type: 3}
+      propertyPath: SuspensionDistance
+      value: 0.1
+      objectReference: {fileID: 0}
+    - target: {fileID: 1130654464432434932, guid: 5bf392b25cf9d0541b1140c84eed081e,
+        type: 3}
+      propertyPath: serializationData.Prefab
+      value: 
+      objectReference: {fileID: 1130654464432434932, guid: 5bf392b25cf9d0541b1140c84eed081e,
+        type: 3}
+    - target: {fileID: 1323428047705636065, guid: 5bf392b25cf9d0541b1140c84eed081e,
+        type: 3}
+      propertyPath: serializedProgramAsset
+      value: 
+      objectReference: {fileID: 11400000, guid: 563a04e7c9ce20144b0b980eb213c434,
+        type: 2}
+    - target: {fileID: 1644761364647440772, guid: 5bf392b25cf9d0541b1140c84eed081e,
+        type: 3}
+      propertyPath: serializationData.Prefab
+      value: 
+      objectReference: {fileID: 1644761364647440772, guid: 5bf392b25cf9d0541b1140c84eed081e,
+        type: 3}
+    - target: {fileID: 1687225698840111893, guid: 5bf392b25cf9d0541b1140c84eed081e,
+        type: 3}
+      propertyPath: serializationData.Prefab
+      value: 
+      objectReference: {fileID: 1687225698840111893, guid: 5bf392b25cf9d0541b1140c84eed081e,
+        type: 3}
+    - target: {fileID: 2200848544039456758, guid: 5bf392b25cf9d0541b1140c84eed081e,
+        type: 3}
+      propertyPath: m_LocalPosition.x
+      value: -0.88
+      objectReference: {fileID: 0}
+    - target: {fileID: 2200848544039456758, guid: 5bf392b25cf9d0541b1140c84eed081e,
+        type: 3}
+      propertyPath: m_LocalPosition.y
+      value: 0.377
+      objectReference: {fileID: 0}
+    - target: {fileID: 2200848544039456758, guid: 5bf392b25cf9d0541b1140c84eed081e,
+        type: 3}
+      propertyPath: m_LocalRotation.w
+      value: 0.9986295
+      objectReference: {fileID: 0}
+    - target: {fileID: 2200848544039456758, guid: 5bf392b25cf9d0541b1140c84eed081e,
+        type: 3}
+      propertyPath: m_LocalRotation.x
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 2200848544039456758, guid: 5bf392b25cf9d0541b1140c84eed081e,
+        type: 3}
+      propertyPath: m_LocalRotation.y
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 2200848544039456758, guid: 5bf392b25cf9d0541b1140c84eed081e,
+        type: 3}
+      propertyPath: m_LocalRotation.z
+      value: -0.052335896
+      objectReference: {fileID: 0}
+    - target: {fileID: 2200848544039456758, guid: 5bf392b25cf9d0541b1140c84eed081e,
+        type: 3}
+      propertyPath: m_LocalEulerAnglesHint.z
+      value: -6
+      objectReference: {fileID: 0}
+    - target: {fileID: 2273631801919413970, guid: 5bf392b25cf9d0541b1140c84eed081e,
+        type: 3}
+      propertyPath: serializationData.Prefab
+      value: 
+      objectReference: {fileID: 2273631801919413970, guid: 5bf392b25cf9d0541b1140c84eed081e,
+        type: 3}
+    - target: {fileID: 2694345463589741952, guid: 5bf392b25cf9d0541b1140c84eed081e,
+        type: 3}
+      propertyPath: m_Name
+      value: ST-Shoreline_Drift_Main
+      objectReference: {fileID: 0}
+    - target: {fileID: 2694345463589741953, guid: 5bf392b25cf9d0541b1140c84eed081e,
+        type: 3}
+      propertyPath: m_LocalPosition.x
+      value: 20.11
+      objectReference: {fileID: 0}
+    - target: {fileID: 2694345463589741953, guid: 5bf392b25cf9d0541b1140c84eed081e,
+        type: 3}
+      propertyPath: m_LocalPosition.y
+      value: 0.0999136
+      objectReference: {fileID: 0}
+    - target: {fileID: 2694345463589741953, guid: 5bf392b25cf9d0541b1140c84eed081e,
+        type: 3}
+      propertyPath: m_LocalPosition.z
+      value: 91.32
+      objectReference: {fileID: 0}
+    - target: {fileID: 2694345463589741953, guid: 5bf392b25cf9d0541b1140c84eed081e,
+        type: 3}
+      propertyPath: m_LocalEulerAnglesHint.x
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 2694345463589741953, guid: 5bf392b25cf9d0541b1140c84eed081e,
+        type: 3}
+      propertyPath: m_LocalEulerAnglesHint.y
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 2694345463589741953, guid: 5bf392b25cf9d0541b1140c84eed081e,
+        type: 3}
+      propertyPath: m_LocalEulerAnglesHint.z
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 2694345463912511244, guid: 5bf392b25cf9d0541b1140c84eed081e,
+        type: 3}
+      propertyPath: serializedProgramAsset
+      value: 
+      objectReference: {fileID: 11400000, guid: 719010c4793f4be4daa9c08fee9607cc,
+        type: 2}
+    - target: {fileID: 2694345463912511245, guid: 5bf392b25cf9d0541b1140c84eed081e,
+        type: 3}
+      propertyPath: serializationData.Prefab
+      value: 
+      objectReference: {fileID: 2694345463912511245, guid: 5bf392b25cf9d0541b1140c84eed081e,
+        type: 3}
+    - target: {fileID: 2694345464263587572, guid: 5bf392b25cf9d0541b1140c84eed081e,
+        type: 3}
+      propertyPath: serializedProgramAsset
+      value: 
+      objectReference: {fileID: 11400000, guid: 719010c4793f4be4daa9c08fee9607cc,
+        type: 2}
+    - target: {fileID: 2694345464263587573, guid: 5bf392b25cf9d0541b1140c84eed081e,
+        type: 3}
+      propertyPath: serializationData.Prefab
+      value: 
+      objectReference: {fileID: 2694345464263587573, guid: 5bf392b25cf9d0541b1140c84eed081e,
+        type: 3}
+    - target: {fileID: 2694345464744909234, guid: 5bf392b25cf9d0541b1140c84eed081e,
+        type: 3}
+      propertyPath: DriveSpeed
+      value: 30000
+      objectReference: {fileID: 0}
+    - target: {fileID: 2694345464744909234, guid: 5bf392b25cf9d0541b1140c84eed081e,
+        type: 3}
+      propertyPath: SteeringMaxSpeedDT
+      value: 15
+      objectReference: {fileID: 0}
+    - target: {fileID: 2694345464744909234, guid: 5bf392b25cf9d0541b1140c84eed081e,
+        type: 3}
+      propertyPath: serializationData.Prefab
+      value: 
+      objectReference: {fileID: 2694345464744909234, guid: 5bf392b25cf9d0541b1140c84eed081e,
+        type: 3}
+    - target: {fileID: 2694345464744909234, guid: 5bf392b25cf9d0541b1140c84eed081e,
+        type: 3}
+      propertyPath: SteeringKeyboardSecsToMax
+      value: 0.3
+      objectReference: {fileID: 0}
+    - target: {fileID: 2694345464744909235, guid: 5bf392b25cf9d0541b1140c84eed081e,
+        type: 3}
+      propertyPath: serializedProgramAsset
+      value: 
+      objectReference: {fileID: 11400000, guid: 53d20b41e672d3b41a6c2c5de9d377d6,
+        type: 2}
+    - target: {fileID: 2694345464811129501, guid: 5bf392b25cf9d0541b1140c84eed081e,
+        type: 3}
+      propertyPath: serializedProgramAsset
+      value: 
+      objectReference: {fileID: 11400000, guid: 719010c4793f4be4daa9c08fee9607cc,
+        type: 2}
+    - target: {fileID: 2694345464811129502, guid: 5bf392b25cf9d0541b1140c84eed081e,
+        type: 3}
+      propertyPath: serializationData.Prefab
+      value: 
+      objectReference: {fileID: 2694345464811129502, guid: 5bf392b25cf9d0541b1140c84eed081e,
+        type: 3}
+    - target: {fileID: 2694345464893820057, guid: 5bf392b25cf9d0541b1140c84eed081e,
+        type: 3}
+      propertyPath: serializationData.Prefab
+      value: 
+      objectReference: {fileID: 2694345464893820057, guid: 5bf392b25cf9d0541b1140c84eed081e,
+        type: 3}
+    - target: {fileID: 2694345464893820059, guid: 5bf392b25cf9d0541b1140c84eed081e,
+        type: 3}
+      propertyPath: serializedProgramAsset
+      value: 
+      objectReference: {fileID: 11400000, guid: 9911554cbfb7c104c9cf464aa6b64f34,
+        type: 2}
+    - target: {fileID: 2694345465017945728, guid: 5bf392b25cf9d0541b1140c84eed081e,
+        type: 3}
+      propertyPath: serializationData.Prefab
+      value: 
+      objectReference: {fileID: 2694345465017945728, guid: 5bf392b25cf9d0541b1140c84eed081e,
+        type: 3}
+    - target: {fileID: 2694345465017945735, guid: 5bf392b25cf9d0541b1140c84eed081e,
+        type: 3}
+      propertyPath: serializedProgramAsset
+      value: 
+      objectReference: {fileID: 11400000, guid: 719010c4793f4be4daa9c08fee9607cc,
+        type: 2}
+    - target: {fileID: 2694345465066248184, guid: 5bf392b25cf9d0541b1140c84eed081e,
+        type: 3}
+      propertyPath: serializationData.Prefab
+      value: 
+      objectReference: {fileID: 2694345465066248184, guid: 5bf392b25cf9d0541b1140c84eed081e,
+        type: 3}
+    - target: {fileID: 2694345465066248185, guid: 5bf392b25cf9d0541b1140c84eed081e,
+        type: 3}
+      propertyPath: serializedProgramAsset
+      value: 
+      objectReference: {fileID: 11400000, guid: 9244a79658a297549acd888e2c87b02f,
+        type: 2}
+    - target: {fileID: 2694345465066248191, guid: 5bf392b25cf9d0541b1140c84eed081e,
+        type: 3}
+      propertyPath: m_IsActive
+      value: 1
+      objectReference: {fileID: 0}
+    - target: {fileID: 2694345465458966160, guid: 5bf392b25cf9d0541b1140c84eed081e,
+        type: 3}
+      propertyPath: interactText
+      value: Respawn ST-Shoreline-Drift
+      objectReference: {fileID: 0}
+    - target: {fileID: 2694345465458966160, guid: 5bf392b25cf9d0541b1140c84eed081e,
+        type: 3}
+      propertyPath: serializedProgramAsset
+      value: 
+      objectReference: {fileID: 11400000, guid: 76b2ac238382bd24cb97fa2fa1bdb042,
+        type: 2}
+    - target: {fileID: 2694345465458966161, guid: 5bf392b25cf9d0541b1140c84eed081e,
+        type: 3}
+      propertyPath: serializationData.Prefab
+      value: 
+      objectReference: {fileID: 2694345465458966161, guid: 5bf392b25cf9d0541b1140c84eed081e,
+        type: 3}
+    - target: {fileID: 2734758259641462660, guid: 5bf392b25cf9d0541b1140c84eed081e,
+        type: 3}
+      propertyPath: serializationData.Prefab
+      value: 
+      objectReference: {fileID: 2734758259641462660, guid: 5bf392b25cf9d0541b1140c84eed081e,
+        type: 3}
+    - target: {fileID: 3368927640058552212, guid: 5bf392b25cf9d0541b1140c84eed081e,
+        type: 3}
+      propertyPath: m_Materials.Array.data[0]
+      value: 
+      objectReference: {fileID: 2100000, guid: c557e2274fb1fec4cada53454120fb4c, type: 2}
+    - target: {fileID: 3409104263904580611, guid: 5bf392b25cf9d0541b1140c84eed081e,
+        type: 3}
+      propertyPath: serializationData.Prefab
+      value: 
+      objectReference: {fileID: 3409104263904580611, guid: 5bf392b25cf9d0541b1140c84eed081e,
+        type: 3}
+    - target: {fileID: 3744391569418925819, guid: 5bf392b25cf9d0541b1140c84eed081e,
+        type: 3}
+      propertyPath: serializationData.Prefab
+      value: 
+      objectReference: {fileID: 3744391569418925819, guid: 5bf392b25cf9d0541b1140c84eed081e,
+        type: 3}
+    - target: {fileID: 4925082315941562237, guid: 5bf392b25cf9d0541b1140c84eed081e,
+        type: 3}
+      propertyPath: Grip
+      value: 1.75
+      objectReference: {fileID: 0}
+    - target: {fileID: 4925082315941562237, guid: 5bf392b25cf9d0541b1140c84eed081e,
+        type: 3}
+      propertyPath: SuspensionDistance
+      value: 0.1
+      objectReference: {fileID: 0}
+    - target: {fileID: 4925082315941562237, guid: 5bf392b25cf9d0541b1140c84eed081e,
+        type: 3}
+      propertyPath: serializationData.Prefab
+      value: 
+      objectReference: {fileID: 4925082315941562237, guid: 5bf392b25cf9d0541b1140c84eed081e,
+        type: 3}
+    - target: {fileID: 4926300347045897162, guid: 5bf392b25cf9d0541b1140c84eed081e,
+        type: 3}
+      propertyPath: serializedProgramAsset
+      value: 
+      objectReference: {fileID: 11400000, guid: 15f1671689559df449f00f6067cd16d7,
+        type: 2}
+    - target: {fileID: 5009890455831887984, guid: 5bf392b25cf9d0541b1140c84eed081e,
+        type: 3}
+      propertyPath: serializedProgramAsset
+      value: 
+      objectReference: {fileID: 11400000, guid: 15f1671689559df449f00f6067cd16d7,
+        type: 2}
+    - target: {fileID: 5347812248596100192, guid: 5bf392b25cf9d0541b1140c84eed081e,
+        type: 3}
+      propertyPath: serializedProgramAsset
+      value: 
+      objectReference: {fileID: 11400000, guid: a71474697de683244ac1c8fe41834a21,
+        type: 2}
+    - target: {fileID: 5517124336343951577, guid: 5bf392b25cf9d0541b1140c84eed081e,
+        type: 3}
+      propertyPath: serializationData.Prefab
+      value: 
+      objectReference: {fileID: 5517124336343951577, guid: 5bf392b25cf9d0541b1140c84eed081e,
+        type: 3}
+    - target: {fileID: 5816828478684328509, guid: 5bf392b25cf9d0541b1140c84eed081e,
+        type: 3}
+      propertyPath: m_Name
+      value: MFD_DriftMode
+      objectReference: {fileID: 0}
+    - target: {fileID: 5877551820122720607, guid: 5bf392b25cf9d0541b1140c84eed081e,
+        type: 3}
+      propertyPath: Grip
+      value: 1.4
+      objectReference: {fileID: 0}
+    - target: {fileID: 5877551820122720607, guid: 5bf392b25cf9d0541b1140c84eed081e,
+        type: 3}
+      propertyPath: LateralGrip
+      value: 1
+      objectReference: {fileID: 0}
+    - target: {fileID: 5877551820122720607, guid: 5bf392b25cf9d0541b1140c84eed081e,
+        type: 3}
+      propertyPath: EngineInfluence
+      value: 25000
+      objectReference: {fileID: 0}
+    - target: {fileID: 5877551820122720607, guid: 5bf392b25cf9d0541b1140c84eed081e,
+        type: 3}
+      propertyPath: SuspensionDistance
+      value: 0.1
+      objectReference: {fileID: 0}
+    - target: {fileID: 5877551820122720607, guid: 5bf392b25cf9d0541b1140c84eed081e,
+        type: 3}
+      propertyPath: serializationData.Prefab
+      value: 
+      objectReference: {fileID: 5877551820122720607, guid: 5bf392b25cf9d0541b1140c84eed081e,
+        type: 3}
+    - target: {fileID: 5919279918957159606, guid: 5bf392b25cf9d0541b1140c84eed081e,
+        type: 3}
+      propertyPath: serializationData.Prefab
+      value: 
+      objectReference: {fileID: 5919279918957159606, guid: 5bf392b25cf9d0541b1140c84eed081e,
+        type: 3}
+    - target: {fileID: 6064757592259858975, guid: 5bf392b25cf9d0541b1140c84eed081e,
+        type: 3}
+      propertyPath: serializedProgramAsset
+      value: 
+      objectReference: {fileID: 11400000, guid: a71474697de683244ac1c8fe41834a21,
+        type: 2}
+    - target: {fileID: 7557562699555873249, guid: 5bf392b25cf9d0541b1140c84eed081e,
+        type: 3}
+      propertyPath: serializedProgramAsset
+      value: 
+      objectReference: {fileID: 11400000, guid: a71474697de683244ac1c8fe41834a21,
+        type: 2}
+    - target: {fileID: 7578714401065311113, guid: 5bf392b25cf9d0541b1140c84eed081e,
+        type: 3}
+      propertyPath: PlaneName
+      value: ST-Shoreline-D
+      objectReference: {fileID: 0}
+    - target: {fileID: 7578714401065311113, guid: 5bf392b25cf9d0541b1140c84eed081e,
+        type: 3}
+      propertyPath: serializationData.Prefab
+      value: 
+      objectReference: {fileID: 7578714401065311113, guid: 5bf392b25cf9d0541b1140c84eed081e,
+        type: 3}
+    - target: {fileID: 7701674616936541879, guid: 5bf392b25cf9d0541b1140c84eed081e,
+        type: 3}
+      propertyPath: m_IsActive
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 7743591606466825947, guid: 5bf392b25cf9d0541b1140c84eed081e,
+        type: 3}
+      propertyPath: m_LocalPosition.x
+      value: -0.88
+      objectReference: {fileID: 0}
+    - target: {fileID: 7743591606466825947, guid: 5bf392b25cf9d0541b1140c84eed081e,
+        type: 3}
+      propertyPath: m_LocalRotation.w
+      value: 0.99965733
+      objectReference: {fileID: 0}
+    - target: {fileID: 7743591606466825947, guid: 5bf392b25cf9d0541b1140c84eed081e,
+        type: 3}
+      propertyPath: m_LocalRotation.y
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 7743591606466825947, guid: 5bf392b25cf9d0541b1140c84eed081e,
+        type: 3}
+      propertyPath: m_LocalRotation.z
+      value: -0.026176924
+      objectReference: {fileID: 0}
+    - target: {fileID: 7743591606466825947, guid: 5bf392b25cf9d0541b1140c84eed081e,
+        type: 3}
+      propertyPath: m_LocalEulerAnglesHint.z
+      value: -3
+      objectReference: {fileID: 0}
+    - target: {fileID: 7870841048014173620, guid: 5bf392b25cf9d0541b1140c84eed081e,
+        type: 3}
+      propertyPath: Grip
+      value: 1.75
+      objectReference: {fileID: 0}
+    - target: {fileID: 7870841048014173620, guid: 5bf392b25cf9d0541b1140c84eed081e,
+        type: 3}
+      propertyPath: SuspensionDistance
+      value: 0.1
+      objectReference: {fileID: 0}
+    - target: {fileID: 7870841048014173620, guid: 5bf392b25cf9d0541b1140c84eed081e,
+        type: 3}
+      propertyPath: serializationData.Prefab
+      value: 
+      objectReference: {fileID: 7870841048014173620, guid: 5bf392b25cf9d0541b1140c84eed081e,
+        type: 3}
+    - target: {fileID: 8097423847710073956, guid: 5bf392b25cf9d0541b1140c84eed081e,
+        type: 3}
+      propertyPath: serializedProgramAsset
+      value: 
+      objectReference: {fileID: 11400000, guid: 30a8ce1bf785a394a99d1682ad3794a6,
+        type: 2}
+    - target: {fileID: 8097423847710073957, guid: 5bf392b25cf9d0541b1140c84eed081e,
+        type: 3}
+      propertyPath: serializationData.Prefab
+      value: 
+      objectReference: {fileID: 8097423847710073957, guid: 5bf392b25cf9d0541b1140c84eed081e,
+        type: 3}
+    - target: {fileID: 8097423848009162069, guid: 5bf392b25cf9d0541b1140c84eed081e,
+        type: 3}
+      propertyPath: serializedProgramAsset
+      value: 
+      objectReference: {fileID: 11400000, guid: 719010c4793f4be4daa9c08fee9607cc,
+        type: 2}
+    - target: {fileID: 8097423848009162070, guid: 5bf392b25cf9d0541b1140c84eed081e,
+        type: 3}
+      propertyPath: serializationData.Prefab
+      value: 
+      objectReference: {fileID: 8097423848009162070, guid: 5bf392b25cf9d0541b1140c84eed081e,
+        type: 3}
+    - target: {fileID: 8220372861141920109, guid: 5bf392b25cf9d0541b1140c84eed081e,
+        type: 3}
+      propertyPath: Lfunc1key
+      value: 103
+      objectReference: {fileID: 0}
+    - target: {fileID: 8220372861141920109, guid: 5bf392b25cf9d0541b1140c84eed081e,
+        type: 3}
+      propertyPath: serializationData.Prefab
+      value: 
+      objectReference: {fileID: 8220372861141920109, guid: 5bf392b25cf9d0541b1140c84eed081e,
+        type: 3}
+    - target: {fileID: 8569371687125146023, guid: 5bf392b25cf9d0541b1140c84eed081e,
+        type: 3}
+      propertyPath: serializationData.Prefab
+      value: 
+      objectReference: {fileID: 8569371687125146023, guid: 5bf392b25cf9d0541b1140c84eed081e,
+        type: 3}
+    - target: {fileID: 8951979358842888173, guid: 5bf392b25cf9d0541b1140c84eed081e,
+        type: 3}
+      propertyPath: m_LocalPosition.x
+      value: 0.88
+      objectReference: {fileID: 0}
+    - target: {fileID: 8951979358842888173, guid: 5bf392b25cf9d0541b1140c84eed081e,
+        type: 3}
+      propertyPath: m_LocalRotation.w
+      value: 0.99965733
+      objectReference: {fileID: 0}
+    - target: {fileID: 8951979358842888173, guid: 5bf392b25cf9d0541b1140c84eed081e,
+        type: 3}
+      propertyPath: m_LocalRotation.y
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 8951979358842888173, guid: 5bf392b25cf9d0541b1140c84eed081e,
+        type: 3}
+      propertyPath: m_LocalRotation.z
+      value: 0.026176924
+      objectReference: {fileID: 0}
+    - target: {fileID: 8951979358842888173, guid: 5bf392b25cf9d0541b1140c84eed081e,
+        type: 3}
+      propertyPath: m_LocalEulerAnglesHint.z
+      value: 3
+      objectReference: {fileID: 0}
+    - target: {fileID: 9043661907126510229, guid: 5bf392b25cf9d0541b1140c84eed081e,
+        type: 3}
+      propertyPath: serializationData.Prefab
+      value: 
+      objectReference: {fileID: 9043661907126510229, guid: 5bf392b25cf9d0541b1140c84eed081e,
+        type: 3}
+    m_RemovedComponents: []
+    m_RemovedGameObjects: []
+    m_AddedGameObjects: []
+    m_AddedComponents: []
+  m_SourcePrefab: {fileID: 100100000, guid: 5bf392b25cf9d0541b1140c84eed081e, type: 3}

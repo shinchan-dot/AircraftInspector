@@ -148,11 +148,11 @@ namespace SaccFlightAndVehicles
                 if (SSV)
                 { SSV.SetProgramVariable("SwitchHandsJoyThrottle", !(bool)SSV.GetProgramVariable("SwitchHandsJoyThrottle")); }
             }
-            /* foreach (UdonSharpBehaviour SGV in SaccGroundVehicles)
+            foreach (UdonSharpBehaviour SGV in SaccGroundVehicles)
             {
                 if (SGV)
                 { SGV.SetProgramVariable("SwitchHandsJoyThrottle", !(bool)SGV.GetProgramVariable("SwitchHandsJoyThrottle")); }
-            } */
+            }
         }
         [System.NonSerialized] public float DialSensDefault;
         public Slider DialSensSlider;
@@ -231,6 +231,11 @@ namespace SaccFlightAndVehicles
                 if (SSV)
                 { SSV.SetProgramVariable("ThrottleSensitivity", sensvalue); }
             }
+            foreach (UdonSharpBehaviour SGV in SaccGroundVehicles)
+            {
+                if (SGV)
+                { SGV.SetProgramVariable("ThrottleSensitivity", sensvalue); }
+            }
         }
         [System.NonSerialized] public float KeyboardThrottleSensitivityDefault;
         public Slider KeyboardThrottleSensitivitySlider;
@@ -285,8 +290,8 @@ namespace SaccFlightAndVehicles
             if (SaccFlight)
             {
                 float strvalue = SaccFlightStrengthSlider.value;
-                SaccFlightStrengthSliderNumber.text = strvalue.ToString("F2");
-                SaccFlight.SetProgramVariable("_thruststrength", strvalue * 90);
+                SaccFlightStrengthSliderNumber.text = strvalue.ToString("F0");
+                SaccFlight.SetProgramVariable("Thrust", strvalue);
             }
         }
         public void Reset()

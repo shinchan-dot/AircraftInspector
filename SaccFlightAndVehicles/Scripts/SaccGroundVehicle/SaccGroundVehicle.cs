@@ -2,7 +2,6 @@
 using UdonSharp;
 using UnityEngine;
 using VRC.SDKBase;
-using VRC.Udon;
 
 namespace SaccFlightAndVehicles
 {
@@ -17,27 +16,33 @@ namespace SaccFlightAndVehicles
         public Renderer MainObjectRenderer;
         [Tooltip("Change all children of VehicleMesh, or just the objects with colliders?")]
         public bool OnlyChangeColliders = false;
-        [Tooltip("Layer to set the VehicleMesh and it's children to when entering vehicle")]
-        public int OnboardVehicleLayer = 31;
         [UdonSynced] public float Health = 73f;
         public Animator VehicleAnimator;
         [System.NonSerialized] public Transform VehicleTransform;
         [System.NonSerialized] public Rigidbody VehicleRigidbody;
+        [Tooltip("Number of steps per second engine speedup code should run, higher number = smoother engine, effects performance of vehicle somewhat")]
+        public int NumStepsSec = 1000;
+        int _numStepsSec = 1;
         [Tooltip("List of wheels to send Engine values to and from")]
         public UdonSharpBehaviour[] DriveWheels;
         [Tooltip("Wheels to get the 'Grounded' value from for autosteering")]
         public UdonSharpBehaviour[] SteerWheels;
         [Tooltip("All of the rest of the wheels")]
         public UdonSharpBehaviour[] OtherWheels;
+        private UdonSharpBehaviour[] AllWheels;
         //public Transform[] DriveWheelsTrans;
         //public sustest[] SteeringWheels;
         //public Transform[] SteeringWheelsTrans;
         [Tooltip("How many revs are added when accelerating")]
         public float DriveSpeed;
+        [Tooltip("Max revs of the engine")]
+        public float RevLimiter = 8000;
         [Tooltip("How many revs are taken away all the time")]
-        public float EngineSlowDown = .75f;
-        [Tooltip("Throttle % that is applied when not touching the controls")]
+        public float EngineSlowDown = 1f;
+        [Tooltip("Throttle that is applied when not touching the controls")]
         public float MinThrottle = .08f;
+        [Tooltip("How agressively to reach minthrottle value when not touching the controls")]
+        public float MinThrottle_PStrength = 2f;
         [Tooltip("Amount of max DriveSpeed that keyboard users have access to, to stop them spinning out")]
         public float DriveSpeedKeyboardMax = 1f;
         //public float SteerAngle;
@@ -66,7 +71,7 @@ namespace SaccFlightAndVehicles
         public float Drag = .02f;
         [Tooltip("Transform to base the pilot's throttle and joystick controls from. Used to make vertical throttle for helicopters, or if the cockpit of your vehicle can move, on transforming vehicle")]
         public Transform ControlsRoot;
-        [Tooltip("Efficiency of the engine at different revs, 0=0, 1=revlimiter")]
+        [Tooltip("Engine power curve over revs, 0=0, 1=revlimiter")]
         public AnimationCurve EngineResponseCurve = AnimationCurve.Linear(0, 1, 1, 1);
         [System.NonSerialized] public Vector3 CurrentVel;
         // [System.NonSerializedAttribute] public bool ThrottleGripLastFrame = false;
@@ -75,14 +80,17 @@ namespace SaccFlightAndVehicles
         public float FuelConsumption = 2;
         /*     [Tooltip("Amount of fuel at which throttle will start reducing")]
             [System.NonSerializedAttribute] public float LowFuel = 125; */
-        //[Tooltip("Multiply how much the VR throttle moves relative to hand movement")]
-        //[System.NonSerializedAttribute] public float ThrottleSensitivity = 6f;
         [Tooltip("Use the left hand trigger to control throttle?")]
         public bool SwitchHandsJoyThrottle = false;
         [Tooltip("Use the left hand grip to grab the steering wheel??")]
         public bool SteeringHand_Left = true;
         [Tooltip("Use the right hand grip to grab the steering wheel??")]
         public bool SteeringHand_Right = true;
+        [Header("ITR:")]
+        [Tooltip("Adjust the rotation of Unity's inbuilt Inertia Tensor Rotation, which is a function of rigidbodies. If set to 0, the plane will be very stable and feel boring to fly.")]
+        public float InertiaTensorRotationMulti = 1;
+        [Tooltip("Inverts Z axis of the Inertia Tensor Rotation, causing the direction of the yawing experienced after rolling to invert")]
+        public bool InvertITRYaw = false;
         [System.NonSerializedAttribute] public bool _HandBrakeOn;
         [System.NonSerializedAttribute, FieldChangeCallback(nameof(HandBrakeOn_))] public int HandBrakeOn = 0;
         public int HandBrakeOn_
@@ -95,28 +103,26 @@ namespace SaccFlightAndVehicles
             get => HandBrakeOn;
         }
         private Vector3 VehiclePosLastFrame;
-        public bool Drift_AutoSteer;
         [Header("AutoSteer (Drift Mode)")]
+        public bool Drift_AutoSteer;
         [Tooltip("Put in the max degrees the wheels can turn to in order to make autosteer work properly")]
         public float SteeringDegrees = 60;
-        public float AutoSteerStrength = 1f;
+        public float AutoSteerStrength = 5f;
         [Header("AutoSteer Disabled")]
         [Tooltip("how fast steering wheel returns to neutral position in destop mode 1 = 1 second, .2 = 5 seconds")]
         public float SteeringReturnSpeedDT = .3f;
         [Tooltip("how fast steering wheel returns to neutral position in VR 1 = 1 second, .2 = 5 seconds")]
         public float SteeringReturnSpeedVR = 5f;
         public bool UseStickSteering;
-        [Header("Engine")]
-        public float RevLimiter = 8000;
-        [Tooltip("Vehicle will take damage if experiences more Gs that this (Internally Gs are calculated in all directions, the HUD shows only vertical Gs so it will differ slightly")]
-        public float MaxGs = 10;
-        [Tooltip("Damage taken Per G above maxGs, per second.\n(Gs - MaxGs) * GDamage = damage/second")]
-        public float GDamage = 10f;
         [Header("Other")]
         [Tooltip("Time until vehicle reappears after exploding")]
         public float RespawnDelay = 10;
         [Tooltip("Time after reappearing the vehicle is invincible for")]
         public float InvincibleAfterSpawn = 2.5f;
+        [Tooltip("Speed at which vehicle will start to take damage from a crash (m/s)")]
+        public float Crash_Damage_Speed = 10f;
+        [Tooltip("Speed at which vehicle will take damage equal to its max health from a crash (m/s)")]
+        public float Crash_Death_Speed = 100f;
         [Tooltip("Damage taken when hit by a bullet")]
         public float BulletDamageTaken = 10f;
         [Tooltip("Impact speed that defines a small crash")]
@@ -133,18 +139,34 @@ namespace SaccFlightAndVehicles
         [Tooltip("Range at which vehicle becomes 'distant' for optimization")]
         public float DistantRange = 400f;
         public float RevLimiterDelay = .04f;
+        public bool RepeatingWorld = true;
+        [Tooltip("Distance you can travel away from world origin before being teleported to the other side of the map. Not recommended to increase, floating point innacuracy and game freezing issues may occur if larger than default")]
+        public float RepeatingWorldDistance = 20000;
         [Header("Bike Stuff (WIP/Broken)")]
         [Tooltip("Max roll angle of head for leaning on bike")]
         public float LeanSensitivity_Roll = 25f;
         [Tooltip("How far head has to move to lean forward/back, high number = less movement required")]
         public float LeanSensitivity_Pitch = 2.5f;
         public bool EnableLeaning = false;
+        public bool Bike_AutoSteer;
+        public float Bike_AutoSteer_CounterStrength = .01f;
+        public float Bike_AutoSteer_Strength = .01f;
+        [Space(10)]
+        [Tooltip("Completely change how the vehicle operates to behave like a tank, enables two throttle sliders, and turns DriveWheels/SteerWheels into Left/Right tracks\nCannot be changed during play")]
+        public bool TankMode;
+        [Tooltip("In desktop mode, use WASD or QAED to control the tank?")]
+        public bool TANK_WASDMode = true;
+        [Tooltip("Make tank slower by this ratio when reversing")]
+        public float TANK_ReverseSpeed = 0.75f;
+        [Tooltip("Multiply how much the VR throttle moves from hand movement, for DFUNCS and TankMode")]
+        [SerializeField] KeyCode TANK_CruiseKey = KeyCode.F2;
+        bool TANK_Cruising;
+        [Tooltip("Multiply how much the VR throttle moves relative to hand movement")]
+        public float ThrottleSensitivity = 6f;
         [Header("Debug")]
         [UdonSynced(UdonSyncMode.Linear)] public float Revs;
         public float Clutch;
-        [System.NonSerialized] public int OutsideVehicleLayer;
-        private float ThrottleNormalizer;
-        public int CurrentGear = 0;
+        public byte CurrentGear = 0;
         private bool LimitingRev = false;
         public Vector3 VehicleVel;
         public float debugSpeedSteeringMulti = 0f;
@@ -155,20 +177,18 @@ namespace SaccFlightAndVehicles
         public float GearRatio = 0f;
         private float HandDistanceZLastFrame;
         private float VRThrottlePos;
-        private float TempThrottle;
-        private float ThrottleValue;
-        private float GDamageToTake;
-        private float ThrottleValueLastFrame;
-        private Quaternion ThrottleZeroPoint;
+        //twist throttle values
+        // private float TempThrottle;
+        // private float ThrottleValue;
+        // private float ThrottleValueLastFrame;
+        // private Quaternion ThrottleZeroPoint;
         private bool Piloting;
         private bool Passenger;
         private float LastHitTime;
         private float PredictedHealth;
-        private int ReSupplied;
         [System.NonSerializedAttribute] public float PlayerThrottle;
         [System.NonSerializedAttribute] public float VehicleSpeed;//set by syncscript if not owner
         [System.NonSerializedAttribute] public bool MovingForward;
-        [System.NonSerialized] public float LastResupplyTime;
         //Quaternion VehicleRotLastFrameThrottle;
         Quaternion VehicleRotLastFrameR;
         [System.NonSerializedAttribute] public bool WheelGripLastFrameR = false;
@@ -196,20 +216,23 @@ namespace SaccFlightAndVehicles
         [System.NonSerializedAttribute] public float AllGs;
         [System.NonSerializedAttribute] public Vector3 LastFrameVel = Vector3.zero;
         private float FinalThrottle;
-        private Vector3 Spawnposition;
-        private Quaternion Spawnrotation;
         private float AutoSteerLerper;
-        [System.NonSerializedAttribute] [UdonSynced(UdonSyncMode.Linear)] public float YawInput;
-        [System.NonSerializedAttribute] [UdonSynced(UdonSyncMode.Linear)] public float ThrottleInput;
+        [System.NonSerializedAttribute][UdonSynced(UdonSyncMode.Linear)] public float YawInput;
+        [System.NonSerializedAttribute][UdonSynced(UdonSyncMode.Linear)] public float ThrottleInput;
         private VRCPlayerApi localPlayer;
         [System.NonSerializedAttribute] public bool InEditor = true;
         [System.NonSerializedAttribute] public bool Initialized = false;
+        private Vector3 LastTouchedTransform_Speed = Vector3.zero;
         private Transform CenterOfMass;
         public float NumGroundedSteerWheels = 0;
         public float NumGroundedWheels = 0;
+        public int NumWheels = 4;
         public float CurrentDistance;
         public bool CurrentlyDistant = true;
+        [System.NonSerializedAttribute] public Vector3 FinalWind;//unused (for compatability)
+        float angleLast;
         int HandsOnWheel;
+        // public float WheelFeedBack;
         [System.NonSerializedAttribute, FieldChangeCallback(nameof(HasFuel_))] public bool HasFuel = true;
         public bool HasFuel_
         {
@@ -251,14 +274,17 @@ namespace SaccFlightAndVehicles
         public void SFEXT_L_EntityStart()
         {
             if (!Initialized) { Init(); }
+            CenterOfMass = EntityControl.CenterOfMass;
+            SetCoMMeshOffset();
+            UsingManualSync = !EntityControl.EntityObjectSync;
+
+            NumWheels = DriveWheels.Length + SteerWheels.Length + OtherWheels.Length;
 
             FullHealth = Health;
             FullFuel = Fuel;
 
-            OutsideVehicleLayer = VehicleMesh.gameObject.layer;//get the layer of the vehicle as set by the world creator
-
             IsOwner = EntityControl.IsOwner;
-            SetWheelIsOwner();
+            UpdateWheelIsOwner();
             InVR = EntityControl.InVR;
             localPlayer = Networking.LocalPlayer;
             if (localPlayer == null)
@@ -266,31 +292,117 @@ namespace SaccFlightAndVehicles
                 InEditor = true;
             }
             else { InEditor = false; }
-            Spawnposition = VehicleTransform.localPosition;
-            Spawnrotation = VehicleTransform.localRotation;
+            EntityControl.Spawnposition = VehicleTransform.localPosition;
+            EntityControl.Spawnrotation = VehicleTransform.localRotation;
             if (!ControlsRoot)
             { ControlsRoot = VehicleTransform; }
-            CenterOfMass = EntityControl.CenterOfMass;
-
-            ThrottleNormalizer = 1 - MinThrottle;
-            // SetWheelSGV();
             for (int i = 0; i < DriveWheels.Length; i++)
             {
                 DriveWheels[i].SetProgramVariable("IsDriveWheel", true);
             }
+            for (int i = 0; i < SteerWheels.Length; i++)
+            {
+                SteerWheels[i].SetProgramVariable("IsSteerWheel", true);
+            }
+            for (int i = 0; i < OtherWheels.Length; i++)
+            {
+                OtherWheels[i].SetProgramVariable("IsOtherWheel", true);
+            }
+            if (TankMode)
+            {
+                for (int i = 0; i < SteerWheels.Length; i++)
+                {
+                    SteerWheels[i].SetProgramVariable("IsDriveWheel", true);
+                }
+            }
+            // Create AllWheels array, making sure that any wheel that is in drivewheels and steerwheels isn't there twice
+            // We assume that no one is stupid enough to put a drive or steer wheel in otherwheels at the same time as it's pointless.
+            int uniqueDriveWheels = DriveWheels.Length;
+            bool[] wheelisDup = new bool[DriveWheels.Length];
+            for (int i = 0; i < DriveWheels.Length; i++)
+            {
+                for (int o = 0; o < SteerWheels.Length; o++)
+                {
+                    if (DriveWheels[i] == SteerWheels[o])
+                    {
+                        wheelisDup[i] = true;
+                        uniqueDriveWheels--;
+                    }
+                }
+            }
+            AllWheels = new SaccWheel[uniqueDriveWheels + SteerWheels.Length + OtherWheels.Length];
+            int sub = 0;
+            for (int i = 0; i < DriveWheels.Length; i++)
+            {
+                if (wheelisDup[i])
+                {
+                    sub++;
+                }
+                else
+                {
+                    AllWheels[i - sub] = DriveWheels[i];
+                }
+            }
+            int insertIndex = uniqueDriveWheels;
+            for (int i = 0; i < SteerWheels.Length; i++)
+            {
+                AllWheels[insertIndex++] = SteerWheels[i];
+            }
+            for (int i = 0; i < OtherWheels.Length; i++)
+            {
+                AllWheels[insertIndex++] = OtherWheels[i];
+            }
+
             CurrentlyDistant = true;
             SendCustomEventDelayedSeconds(nameof(CheckDistance), Random.Range(5f, 7f));//dont do all vehicles on same frame
+            revUpDT = 1f / NumStepsSec;
+
+            SetupGCalcValues();
+        }
+        public void SetupGCalcValues()
+        {
+            NumFUinAvgTime = (int)(GsAveragingTime / Time.fixedDeltaTime);
+            FrameGs = new Vector3[NumFUinAvgTime];
+            Gs_all = Vector3.zero;
         }
         private void Init()
         {
             Initialized = true;
             VehicleRigidbody = EntityControl.gameObject.GetComponent<Rigidbody>();
             VehicleTransform = EntityControl.transform;
-            OutsideVehicleLayer = VehicleMesh.gameObject.layer;//get the layer of the vehicle as set by the world creator
         }
         private void Start()// awake function when
         {
             if (!Initialized) { Init(); }
+        }
+        public void SetCoMMeshOffset()
+        {
+            //move objects to so that the vehicle's main pivot is at the CoM so that syncscript's rotation is smoother
+            Vector3 CoMOffset = CenterOfMass.position - VehicleTransform.position;
+            int c = VehicleTransform.childCount;
+            Transform[] MainObjChildren = new Transform[c];
+            for (int i = 0; i < c; i++)
+            {
+                VehicleTransform.GetChild(i).position -= CoMOffset;
+            }
+            VehicleTransform.position += CoMOffset;
+            VehicleRigidbody.position = VehicleTransform.position;//Unity 2022.3.6f1 bug workaround
+            SendCustomEventDelayedSeconds(nameof(SetCoM_ITR), Time.fixedDeltaTime);//this has to be delayed because ?
+            EntityControl.Spawnposition = VehicleTransform.localPosition;
+            EntityControl.Spawnrotation = VehicleTransform.localRotation;
+        }
+        public void SetCoM_ITR()
+        {
+            VehicleRigidbody.centerOfMass = VehicleTransform.InverseTransformDirection(CenterOfMass.position - VehicleTransform.position);//correct position if scaled
+            EntityControl.CoMSet = true;
+            VehicleRigidbody.inertiaTensor = VehicleRigidbody.inertiaTensor;
+            VehicleRigidbody.inertiaTensorRotation = Quaternion.SlerpUnclamped(Quaternion.identity, VehicleRigidbody.inertiaTensorRotation, InertiaTensorRotationMulti);
+            if (InvertITRYaw)
+            {
+                Vector3 ITR = VehicleRigidbody.inertiaTensorRotation.eulerAngles;
+                ITR.x *= -1;
+                VehicleRigidbody.inertiaTensorRotation = Quaternion.Euler(ITR);
+            }
         }
         public void ReEnableRevs()
         {
@@ -303,6 +415,87 @@ namespace SaccFlightAndVehicles
                 SendCustomEventDelayedSeconds(nameof(ReEnableRevs), RevLimiterDelay);
             }
         }
+#if UNITY_EDITOR
+        public bool ACCELTEST;
+#endif
+        private bool[] ThrottleGripLastFrame = new bool[2];
+        float[] ThrottleZeroPoint = new float[2];
+        float[] TankThrottles = new float[2];
+        float[] TankTempThrottles = new float[2];
+        private float ThrottleSlider(float Min, float Max, bool LeftHand, float DeadZone)
+        {
+            int SliderIndex;
+            float ThrottleGrip;
+            if (LeftHand)
+            {
+                SliderIndex = 0;
+                ThrottleGrip = Input.GetAxisRaw("Oculus_CrossPlatform_PrimaryHandTrigger");
+            }
+            else
+            {
+                SliderIndex = 1;
+                ThrottleGrip = Input.GetAxisRaw("Oculus_CrossPlatform_SecondaryHandTrigger");
+            }
+            //VR Throttle
+            if (ThrottleGrip > GripSensitivity)
+            {
+                Vector3 handdistance;
+                if (LeftHand)
+                { handdistance = ControlsRoot.position - localPlayer.GetTrackingData(VRCPlayerApi.TrackingDataType.LeftHand).position; }
+                else
+                { handdistance = ControlsRoot.position - localPlayer.GetTrackingData(VRCPlayerApi.TrackingDataType.RightHand).position; }
+                handdistance = ControlsRoot.InverseTransformDirection(handdistance);
+
+                float HandThrottleAxis = handdistance.z;
+
+                if (!ThrottleGripLastFrame[SliderIndex])
+                {
+                    if (LeftHand)
+                    {
+                        localPlayer.PlayHapticEventInHand(VRC_Pickup.PickupHand.Left, .05f, .222f, 35);
+                        EntityControl.SendEventToExtensions("SFEXT_O_ThrottleGrabbed_L");
+                    }
+                    else
+                    {
+                        localPlayer.PlayHapticEventInHand(VRC_Pickup.PickupHand.Right, .05f, .222f, 35);
+                        EntityControl.SendEventToExtensions("SFEXT_O_ThrottleGrabbed_R");
+                    }
+                    ThrottleZeroPoint[SliderIndex] = HandThrottleAxis;
+                    TankTempThrottles[SliderIndex] = TankThrottles[SliderIndex];
+                    HandDistanceZLastFrame = 0;
+                }
+                float ThrottleDifference = ThrottleZeroPoint[SliderIndex] - HandThrottleAxis;
+                ThrottleDifference *= ThrottleSensitivity;
+
+                TankThrottles[SliderIndex] = Mathf.Clamp(TankTempThrottles[SliderIndex] + ThrottleDifference, Min, Max);
+
+                HandDistanceZLastFrame = HandThrottleAxis;
+                ThrottleGripLastFrame[SliderIndex] = true;
+            }
+            else
+            {
+                if (ThrottleGripLastFrame[SliderIndex])
+                {
+                    if (Mathf.Abs(TankThrottles[SliderIndex]) < DeadZone)
+                    {
+                        TankThrottles[SliderIndex] = 0;
+                    }
+                    if (LeftHand)
+                    {
+                        localPlayer.PlayHapticEventInHand(VRC_Pickup.PickupHand.Left, .05f, .222f, 35);
+                        EntityControl.SendEventToExtensions("SFEXT_O_ThrottleDropped_L");
+                    }
+                    else
+                    {
+                        localPlayer.PlayHapticEventInHand(VRC_Pickup.PickupHand.Right, .05f, .222f, 35);
+                        EntityControl.SendEventToExtensions("SFEXT_O_ThrottleDropped_R");
+                    }
+                    ThrottleGripLastFrame[SliderIndex] = false;
+                }
+            }
+            float result = TankThrottles[SliderIndex];
+            return result;
+        }
         private void LateUpdate()
         {
             float DeltaTime = Time.deltaTime;
@@ -310,21 +503,15 @@ namespace SaccFlightAndVehicles
             {
                 if (!EntityControl._dead)
                 {
-                    //G/crash Damage
-                    if (GDamageToTake > 0)
-                    {
-                        Health -= GDamageToTake * DeltaTime * GDamage;//take damage of GDamage per second per G above MaxGs
-                        GDamageToTake = 0;
-                    }
                     if (Health <= 0f)//vehicle is ded
                     {
-                        SendCustomNetworkEvent(VRC.Udon.Common.Interfaces.NetworkEventTarget.All, nameof(Explode));
+                        NetworkExplode();
                         return;
                     }
                 }
-                else { GDamageToTake = 0; }
                 if (!Sleeping)
                 {
+                    DoRepeatingWorld();
                     VehicleSpeed = VehicleVel.magnitude;
                     NumGroundedWheels = 0;
                     NumGroundedSteerWheels = 0;
@@ -386,206 +573,283 @@ namespace SaccFlightAndVehicles
                 }
                 if (Piloting)
                 {
-                    int Wi = 0;
-                    int Ai = 0;
-                    int Di = 0;
-                    float LGrip = 0;
-                    float RGrip = 0;
-                    if (!_DisableInput)
+                    if (TankMode)
                     {
-                        //inputs as ints
-                        Wi = Input.GetKey(KeyCode.W) || Input.GetKey(KeyCode.UpArrow) ? 1 : 0;
-                        //int Si = Input.GetKey(KeyCode.S) ? -1 : 0;
-                        Ai = Input.GetKey(KeyCode.A) || Input.GetKey(KeyCode.LeftArrow) ? -1 : 0;
-                        Di = Input.GetKey(KeyCode.D) || Input.GetKey(KeyCode.RightArrow) ? 1 : 0;
-                        if (!InEditor)
+                        if (Input.GetKeyDown(TANK_CruiseKey))
                         {
-                            LGrip = Input.GetAxisRaw("Oculus_CrossPlatform_PrimaryHandTrigger");
-                            RGrip = Input.GetAxisRaw("Oculus_CrossPlatform_SecondaryHandTrigger");
+                            TANK_Cruising = !TANK_Cruising;
                         }
-                    }
-                    //float ThrottleGrip;
-                    // if (SwitchHandsJoyThrottle)
-                    // { ThrottleGrip = RGrip; }
-                    // else
-                    // { ThrottleGrip = LGrip; }
-                    if (EnableLeaning)
-                    {
-                        int Threei = Input.GetKey(KeyCode.Alpha3) ? -1 : 0;
-                        int Ri = Input.GetKey(KeyCode.R) ? 1 : 0;
-                        float VRLean = 0;
-                        float VRLeanPitch = 0;
+                        float LeftThrottle;
+                        float RightThrottle;
+                        float VRThrottleL = 0;
+                        float VRThrottleR = 0;
                         if (InVR)
                         {
-                            Vector3 HeadLean = localPlayer.GetTrackingData(VRCPlayerApi.TrackingDataType.Head).rotation * Vector3.up;
-                            Vector3 HeadLeanRoll = Vector3.ProjectOnPlane(HeadLean, ControlsRoot.forward);
-                            VRLean = Vector3.SignedAngle(HeadLeanRoll, ControlsRoot.up, ControlsRoot.forward);
-                            VRLean = Mathf.Clamp(VRLean / LeanSensitivity_Roll, -1, 1);
-
-                            Vector3 HeadOffset = ControlsRoot.position - localPlayer.GetTrackingData(VRCPlayerApi.TrackingDataType.Head).position;
-                            HeadOffset = ControlsRoot.InverseTransformDirection(HeadOffset);
-                            /*                Vector3 HeadLeanPitch = Vector3.ProjectOnPlane(HeadLean, ControlsRoot.right);
-                                           VRLeanPitch = Vector3.SignedAngle(HeadLeanPitch, ControlsRoot.up, ControlsRoot.right);
-                                           VRLeanPitch = Mathf.Clamp(VRLeanPitch / 25f, -1, 1); */
-                            VRLeanPitch = Mathf.Clamp(HeadOffset.z * LeanSensitivity_Pitch, -1, 1);
+                            VRThrottleL = ThrottleSlider(-1, 1, true, 0.2f);
+                            VRThrottleR = ThrottleSlider(-1, 1, false, 0.2f);
+                        }
+                        int LeftTrackF = 0;
+                        int LeftTrackB = 0;
+                        int RightTrackF = 0;
+                        int RightTrackB = 0;
+                        if (TANK_WASDMode)
+                        {
+                            int Wi = Input.GetKey(KeyCode.W) ? 1 : 0;
+                            int Ai = Input.GetKey(KeyCode.A) ? 1 : 0;
+                            int Si = Input.GetKey(KeyCode.S) ? 1 : 0;
+                            int Di = Input.GetKey(KeyCode.D) ? 1 : 0;
+                            if (Vector3.Dot(CurrentVel, EntityControl.transform.forward) < -.5f)
+                            {
+                                // invert steering when going backwards
+                                Ai *= -1;
+                                Di *= -1;
+                            }
+                            LeftTrackF = Wi - Ai + Di - Si;
+                            LeftTrackB = -Si - Ai + Di + Wi;
+                            RightTrackF = Wi - Di + Ai - Si;
+                            RightTrackB = -Si - Di + Ai + Wi;
                         }
                         else
                         {
-                            Vector3 HeadLean = localPlayer.GetTrackingData(VRCPlayerApi.TrackingDataType.Head).rotation * Vector3.forward;
-                            Vector3 HeadLeanRoll = Vector3.ProjectOnPlane(HeadLean, ControlsRoot.up);
-                            VRLean = Vector3.SignedAngle(HeadLeanRoll, ControlsRoot.forward, ControlsRoot.up);
-                            VRLean = -Mathf.Clamp(VRLean / 25f, -1, 1);
+                            LeftTrackF = Input.GetKey(KeyCode.Q) ? 1 : 0;
+                            LeftTrackB = Input.GetKey(KeyCode.A) ? -1 : 0;
+                            RightTrackF = Input.GetKey(KeyCode.E) ? 1 : 0;
+                            RightTrackB = Input.GetKey(KeyCode.D) ? -1 : 0;
                         }
 
-                        VehicleAnimator.SetFloat("lean", (VRLean * .5f) + .5f);
-                        VehicleAnimator.SetFloat("leanpitch", (VRLeanPitch * .5f) + .5f);
-                        VehicleRigidbody.centerOfMass = transform.InverseTransformDirection(CenterOfMass.position - transform.position);//correct position if scaled}
-                    }
+                        LeftThrottle = Mathf.Clamp(LeftTrackF + LeftTrackB + VRThrottleL, -1, 1);
+                        RightThrottle = Mathf.Clamp(RightTrackF + RightTrackB + VRThrottleR, -1, 1);
+                        if (TANK_Cruising)
+                        {
+                            if (RightThrottle != 0 || LeftThrottle != 0)
+                            {
+                                if (Mathf.Abs(RightThrottle + LeftThrottle) == 2)
+                                { TANK_Cruising = false; }
+                            }
+                            else LeftThrottle = RightThrottle = 1;
+                        }
 
-                    ///VR Twist Throttle
-                    /*                 if (ThrottleGrip > GripSensitivity)
-                                    {
-                                        Quaternion VehicleRotDif = ControlsRoot.rotation * Quaternion.Inverse(VehicleRotLastFrameThrottle);//difference in vehicle's rotation since last frame
-                                        VehicleRotLastFrameThrottle = ControlsRoot.rotation;
-                                        ThrottleZeroPoint = VehicleRotDif * ThrottleZeroPoint;//zero point rotates with the vehicle so it appears still to the pilot
-                                        if (!ThrottleGripLastFrame)//first frame you gripped Throttle
+                        //For animations
+                        ThrottleInput = LeftThrottle * .5f + .5f;
+                        YawInput = RightThrottle;
+                        //
+                        FinalThrottle = Mathf.Max(Mathf.Abs(LeftThrottle) + Mathf.Abs(RightThrottle));
+
+                        // bool LeftNeg = LeftThrottle < 0;
+                        // bool RightNeg = RightThrottle < 0;
+                        // float RGearRatio = RightNeg ? -GearRatio : GearRatio;
+                        // float LGearRatio = LeftNeg ? -GearRatio : GearRatio;
+                        float reverseSpeedL = LeftThrottle < 0 ? TANK_ReverseSpeed : 1;
+                        float reverseSpeedR = RightThrottle < 0 ? TANK_ReverseSpeed : 1;
+                        float LGearRatio = Mathf.LerpUnclamped(0, GearRatio, LeftThrottle * reverseSpeedL);
+                        float RGearRatio = Mathf.LerpUnclamped(0, GearRatio, RightThrottle * reverseSpeedR);
+
+                        // float LClutch = Clutch;
+                        // float RClutch = Clutch;
+                        // if (LeftThrottle == 0) { LClutch = 1; }
+                        // if (RightThrottle == 0) { RClutch = 1; }
+                        for (int i = 0; i < DriveWheels.Length; i++)
+                        {
+                            DriveWheels[i].SetProgramVariable("Clutch", Clutch);
+                            DriveWheels[i].SetProgramVariable("_GearRatio", LGearRatio);
+                        }
+                        for (int i = 0; i < SteerWheels.Length; i++)
+                        {
+                            SteerWheels[i].SetProgramVariable("Clutch", Clutch);
+                            SteerWheels[i].SetProgramVariable("_GearRatio", RGearRatio);
+                        }
+                    }
+                    else
+                    {
+                        int Wi = 0;
+                        int Ai = 0;
+                        int Di = 0;
+                        float LGrip = 0;
+                        float RGrip = 0;
+                        if (!_DisableInput)
+                        {
+                            //inputs as ints
+
+#if UNITY_EDITOR
+                            Wi = Input.GetKey(KeyCode.W) || Input.GetKey(KeyCode.UpArrow) || ACCELTEST ? 1 : 0;
+#else
+                            Wi = Input.GetKey(KeyCode.W) || Input.GetKey(KeyCode.UpArrow) ? 1 : 0;
+#endif
+                            //int Si = Input.GetKey(KeyCode.S) ? -1 : 0;
+                            Ai = Input.GetKey(KeyCode.A) || Input.GetKey(KeyCode.LeftArrow) ? -1 : 0;
+                            Di = Input.GetKey(KeyCode.D) || Input.GetKey(KeyCode.RightArrow) ? 1 : 0;
+                            if (!InEditor)
+                            {
+                                LGrip = Input.GetAxisRaw("Oculus_CrossPlatform_PrimaryHandTrigger");
+                                RGrip = Input.GetAxisRaw("Oculus_CrossPlatform_SecondaryHandTrigger");
+                            }
+                        }
+                        //float ThrottleGrip;
+                        // if (SwitchHandsJoyThrottle)
+                        // { ThrottleGrip = RGrip; }
+                        // else
+                        // { ThrottleGrip = LGrip; }
+                        if (EnableLeaning)
+                        {
+                            int Threei = Input.GetKey(KeyCode.Alpha3) ? -1 : 0;
+                            int Ri = Input.GetKey(KeyCode.R) ? 1 : 0;
+                            float VRLean = 0;
+                            float VRLeanPitch = 0;
+                            if (InVR)
+                            {
+                                Vector3 HeadLean = localPlayer.GetTrackingData(VRCPlayerApi.TrackingDataType.Head).rotation * Vector3.up;
+                                Vector3 HeadLeanRoll = Vector3.ProjectOnPlane(HeadLean, ControlsRoot.forward);
+                                VRLean = Vector3.SignedAngle(HeadLeanRoll, ControlsRoot.up, ControlsRoot.forward);
+                                VRLean = Mathf.Clamp(VRLean / LeanSensitivity_Roll, -1, 1);
+
+                                Vector3 HeadOffset = ControlsRoot.position - localPlayer.GetTrackingData(VRCPlayerApi.TrackingDataType.Head).position;
+                                HeadOffset = ControlsRoot.InverseTransformDirection(HeadOffset);
+                                /*                Vector3 HeadLeanPitch = Vector3.ProjectOnPlane(HeadLean, ControlsRoot.right);
+                                               VRLeanPitch = Vector3.SignedAngle(HeadLeanPitch, ControlsRoot.up, ControlsRoot.right);
+                                               VRLeanPitch = Mathf.Clamp(VRLeanPitch / 25f, -1, 1); */
+                                VRLeanPitch = Mathf.Clamp(HeadOffset.z * LeanSensitivity_Pitch, -1, 1);
+                            }
+                            else
+                            {
+                                Vector3 HeadLean = localPlayer.GetTrackingData(VRCPlayerApi.TrackingDataType.Head).rotation * Vector3.forward;
+                                Vector3 HeadLeanRoll = Vector3.ProjectOnPlane(HeadLean, ControlsRoot.up);
+                                VRLean = Vector3.SignedAngle(HeadLeanRoll, ControlsRoot.forward, ControlsRoot.up);
+                                VRLean = -Mathf.Clamp(VRLean / 25f, -1, 1);
+                            }
+
+                            VehicleAnimator.SetFloat("lean", (VRLean * .5f) + .5f);
+                            VehicleAnimator.SetFloat("leanpitch", (VRLeanPitch * .5f) + .5f);
+                            VehicleRigidbody.centerOfMass = transform.InverseTransformDirection(CenterOfMass.position - transform.position);//correct position if scaled}
+                        }
+
+                        ///VR Twist Throttle
+                        /*                 if (ThrottleGrip > GripSensitivity)
                                         {
-                                            EntityControl.SendEventToExtensions("SFEXT_O_ThrottleGrabbed");
-                                            VehicleRotDif = Quaternion.identity;
-                                            if (SwitchHandsJoyThrottle)
-                                            { ThrottleZeroPoint = localPlayer.GetTrackingData(VRCPlayerApi.TrackingDataType.RightHand).rotation; }//rotation of the controller relative to the vehicle when it was pressed
-                                            else
-                                            { ThrottleZeroPoint = localPlayer.GetTrackingData(VRCPlayerApi.TrackingDataType.LeftHand).rotation; }
-                                            ThrottleValue = -ThrottleInput * ThrottleDegrees;
-                                            ThrottleValueLastFrame = 0;
-                                            CompareAngleLastFrameThrottle = Vector3.up;
-                                            ThrottleValueLastFrame = 0;
+                                            Quaternion VehicleRotDif = ControlsRoot.rotation * Quaternion.Inverse(VehicleRotLastFrameThrottle);//difference in vehicle's rotation since last frame
+                                            VehicleRotLastFrameThrottle = ControlsRoot.rotation;
+                                            ThrottleZeroPoint = VehicleRotDif * ThrottleZeroPoint;//zero point rotates with the vehicle so it appears still to the pilot
+                                            if (!ThrottleGripLastFrame)//first frame you gripped Throttle
+                                            {
+                                                EntityControl.SendEventToExtensions("SFEXT_O_ThrottleGrabbed");
+                                                VehicleRotDif = Quaternion.identity;
+                                                if (SwitchHandsJoyThrottle)
+                                                { ThrottleZeroPoint = localPlayer.GetTrackingData(VRCPlayerApi.TrackingDataType.RightHand).rotation; }//rotation of the controller relative to the vehicle when it was pressed
+                                                else
+                                                { ThrottleZeroPoint = localPlayer.GetTrackingData(VRCPlayerApi.TrackingDataType.LeftHand).rotation; }
+                                                ThrottleValue = -ThrottleInput * ThrottleDegrees;
+                                                ThrottleValueLastFrame = 0;
+                                                CompareAngleLastFrameThrottle = Vector3.up;
+                                                ThrottleValueLastFrame = 0;
+                                            }
+                                            ThrottleGripLastFrame = true;
+                                            //difference between the vehicle and the hand's rotation, and then the difference between that and the ThrottleZeroPoint
+                                            Quaternion ThrottleDifference;
+                                            ThrottleDifference = Quaternion.Inverse(ControlsRoot.rotation) *
+                                                (SwitchHandsJoyThrottle ? localPlayer.GetTrackingData(VRCPlayerApi.TrackingDataType.RightHand).rotation
+                                                                        : localPlayer.GetTrackingData(VRCPlayerApi.TrackingDataType.LeftHand).rotation)
+                                            * Quaternion.Inverse(ThrottleZeroPoint)
+                                             * ControlsRoot.rotation;
+
+                                            Vector3 ThrottlePosPitch = (ThrottleDifference * Vector3.up);
+                                            Vector3 CompareAngle = Vector3.ProjectOnPlane(ThrottlePosPitch, Vector3.right);
+                                            ThrottleValue += (Vector3.SignedAngle(CompareAngleLastFrameThrottle, CompareAngle, Vector3.right));
+                                            CompareAngleLastFrameThrottle = CompareAngle;
+                                            ThrottleValueLastFrame = ThrottleValue;
+                                            VRThrottlePos = Mathf.Max(-ThrottleValue / ThrottleDegrees, 0f);
                                         }
-                                        ThrottleGripLastFrame = true;
-                                        //difference between the vehicle and the hand's rotation, and then the difference between that and the ThrottleZeroPoint
-                                        Quaternion ThrottleDifference;
-                                        ThrottleDifference = Quaternion.Inverse(ControlsRoot.rotation) *
-                                            (SwitchHandsJoyThrottle ? localPlayer.GetTrackingData(VRCPlayerApi.TrackingDataType.RightHand).rotation
-                                                                    : localPlayer.GetTrackingData(VRCPlayerApi.TrackingDataType.LeftHand).rotation)
-                                        * Quaternion.Inverse(ThrottleZeroPoint)
-                                         * ControlsRoot.rotation;
-
-                                        Vector3 ThrottlePosPitch = (ThrottleDifference * Vector3.up);
-                                        Vector3 CompareAngle = Vector3.ProjectOnPlane(ThrottlePosPitch, Vector3.right);
-                                        ThrottleValue += (Vector3.SignedAngle(CompareAngleLastFrameThrottle, CompareAngle, Vector3.right));
-                                        CompareAngleLastFrameThrottle = CompareAngle;
-                                        ThrottleValueLastFrame = ThrottleValue;
-                                        VRThrottlePos = Mathf.Max(-ThrottleValue / ThrottleDegrees, 0f);
-                                    }
-                                    else
-                                    {
-                                        VRThrottlePos = 0f;
-                                        if (ThrottleGripLastFrame)//first frame you let go of Throttle
-                                        { EntityControl.SendEventToExtensions("SFEXT_O_ThrottleDropped"); }
-                                        ThrottleGripLastFrame = false;
-                                    } */
-                    if (SwitchHandsJoyThrottle)
-                    {
-                        VRThrottlePos = Input.GetAxisRaw("Oculus_CrossPlatform_PrimaryIndexTrigger");
-                    }
-                    else
-                    {
-                        VRThrottlePos = Input.GetAxisRaw("Oculus_CrossPlatform_SecondaryIndexTrigger");
-                    }
-
-                    HandsOnWheel = 0;
-                    if (SteeringHand_Right)
-                    { RHandSteeringWheel(RGrip); }
-                    if (SteeringHand_Left)
-                    { LHandSteeringWheel(LGrip); }
-
-                    float VRSteerInput = 0;
-                    if (InVR)
-                    {
-                        if (HandsOnWheel > 0)
+                                        else
+                                        {
+                                            VRThrottlePos = 0f;
+                                            if (ThrottleGripLastFrame)//first frame you let go of Throttle
+                                            { EntityControl.SendEventToExtensions("SFEXT_O_ThrottleDropped"); }
+                                            ThrottleGripLastFrame = false;
+                                        } */
+                        if (SwitchHandsJoyThrottle)
                         {
-                            VRSteerInput = (VRJoystickPosL + VRJoystickPosR) / (float)HandsOnWheel;
+                            VRThrottlePos = Input.GetAxisRaw("Oculus_CrossPlatform_PrimaryIndexTrigger");
                         }
                         else
                         {
-                            AutoSteerLerper = YawInput;
+                            VRThrottlePos = Input.GetAxisRaw("Oculus_CrossPlatform_SecondaryIndexTrigger");
                         }
-                    }
-                    float SteerInput;
-                    if (UseStickSteering)
-                    {
-                        SteerInput = Ai + Di + Input.GetAxisRaw("Oculus_CrossPlatform_SecondaryThumbstickHorizontal");
-                    }
-                    else
-                    {
-                        SteerInput = -VRSteerInput + Ai + Di;
-                    }
-                    float AutoSteer = Vector3.SignedAngle(VehicleTransform.forward, Vector3.ProjectOnPlane(VehicleVel, VehicleTransform.up), VehicleTransform.up);
-                    if (Mathf.Abs(AutoSteer) > 110)
-                    { AutoSteer = 0; }
 
-                    { AutoSteer = Mathf.Clamp(AutoSteer / SteeringDegrees, -1, 1); }
+                        HandsOnWheel = 0;
+                        if (SteeringHand_Right)
+                        { RHandSteeringWheel(RGrip); }
+                        if (SteeringHand_Left)
+                        { LHandSteeringWheel(LGrip); }
 
-                    float GroundedwheelsRatio = NumGroundedWheels / SteerWheels.Length;
-                    if (InVR && !UseStickSteering)
-                    {
-                        AutoSteerLerper = Mathf.Lerp(AutoSteerLerper, AutoSteer, VehicleSpeed * AutoSteerStrength * GroundedwheelsRatio * DeltaTime);
-                        float YawAddAmount = SteerInput;
-                        if (Mathf.Abs(YawAddAmount) > 0f)
+                        float VRSteerInput = 0;
+                        if (InVR)
                         {
-                            if (Drift_AutoSteer)
+                            if (HandsOnWheel > 0)
                             {
-                                YawInput = Mathf.Clamp(AutoSteerLerper + YawAddAmount, -1f, 1f);
+                                VRSteerInput = (VRJoystickPosL + VRJoystickPosR) / (float)HandsOnWheel;
                             }
                             else
                             {
-                                YawInput = YawAddAmount;
+                                AutoSteerLerper = YawInput;
                             }
+                        }
+                        float SteerInput;
+                        if (UseStickSteering)
+                        {
+                            SteerInput = Ai + Di + Input.GetAxisRaw("Oculus_CrossPlatform_SecondaryThumbstickHorizontal");
                         }
                         else
                         {
-                            if (Drift_AutoSteer)
-                            {
-                                YawInput = Mathf.Lerp(YawInput, AutoSteer, VehicleSpeed * AutoSteerStrength * GroundedwheelsRatio * DeltaTime);
-                            }
-                            else
-                            {
-                                YawInput = Mathf.MoveTowards(YawInput, 0f, (1f / SteeringReturnSpeedVR) * DeltaTime);
-                            }
+                            SteerInput = -VRSteerInput + Ai + Di;
                         }
-                    }
-                    else if (UseStickSteering)
-                    {
-                        if (SteeringMaxSpeedDTDisabled || _HandBrakeOn)//no steering limit when handbarke on
+                        //get the average transform movement that the steering wheels are touching
+                        LastTouchedTransform_Speed = Vector3.zero;
+                        for (int i = 0; i < SteerWheels.Length; i++)
                         {
-                            YawInput = Mathf.Clamp(SteerInput, -1, 1);
+                            LastTouchedTransform_Speed += (Vector3)SteerWheels[i].GetProgramVariable("LastTouchedTransform_Speed");
                         }
-                        else
+                        for (int i = 0; i < DriveWheels.Length; i++)
                         {
-                            float SpeedSteeringLimitUpper = 1 - (VehicleSpeed / SteeringMaxSpeedDT);
-                            SpeedSteeringLimitUpper = Mathf.Clamp(SpeedSteeringLimitUpper, DesktopMinSteering, 1);
-                            float SpeedSteeringLimitLower = -SpeedSteeringLimitUpper;
+                            LastTouchedTransform_Speed += (Vector3)DriveWheels[i].GetProgramVariable("LastTouchedTransform_Speed");
+                        }
+                        LastTouchedTransform_Speed = LastTouchedTransform_Speed / (SteerWheels.Length + DriveWheels.Length);
+                        float AutoSteer = Vector3.SignedAngle(VehicleTransform.forward, Vector3.ProjectOnPlane(VehicleVel - LastTouchedTransform_Speed, VehicleTransform.up), VehicleTransform.up);
+                        if (Mathf.Abs(AutoSteer) > 110)
+                        { AutoSteer = 0; }
 
-                            if (AutoSteer < 0)
+                        { AutoSteer = Mathf.Clamp(AutoSteer / SteeringDegrees, -1, 1); }
+
+                        float GroundedwheelsRatio = NumGroundedSteerWheels / SteerWheels.Length;
+                        if (InVR && !UseStickSteering)
+                        {
+                            AutoSteerLerper = Mathf.Lerp(AutoSteerLerper, AutoSteer, 1 - Mathf.Pow(0.5f, VehicleSpeed * AutoSteerStrength * GroundedwheelsRatio * DeltaTime));
+                            float YawAddAmount = SteerInput;
+                            if (Mathf.Abs(YawAddAmount) > 0f)
                             {
-                                SpeedSteeringLimitLower = Mathf.Min(SpeedSteeringLimitLower, AutoSteer - DesktopMinSteering);
-                                YawInput = SteerInput * -SpeedSteeringLimitLower;
+                                if (Drift_AutoSteer)
+                                {
+                                    YawInput = Mathf.Clamp(AutoSteerLerper + YawAddAmount, -1f, 1f);
+                                }
+                                else
+                                {
+                                    YawInput = YawAddAmount;
+                                }
                             }
                             else
                             {
-                                SpeedSteeringLimitUpper = Mathf.Max(SpeedSteeringLimitUpper, AutoSteer + DesktopMinSteering);
-                                YawInput = SteerInput * SpeedSteeringLimitUpper;
+                                if (Drift_AutoSteer)
+                                {
+                                    YawInput = Mathf.Lerp(YawInput, AutoSteer, 1 - Mathf.Pow(0.5f, VehicleSpeed * AutoSteerStrength * GroundedwheelsRatio * DeltaTime));
+                                }
+                                else
+                                {
+                                    YawInput = Mathf.MoveTowards(YawInput, 0f, (1f / SteeringReturnSpeedVR) * DeltaTime);
+                                }
                             }
                         }
-                    }
-                    else
-                    {
-                        float YawAddAmount = SteerInput * DeltaTime * (1f / SteeringKeyboardSecsToMax);
-                        if (YawAddAmount != 0f)
+                        else if (UseStickSteering)
                         {
                             if (SteeringMaxSpeedDTDisabled || _HandBrakeOn)//no steering limit when handbarke on
                             {
-                                YawInput = Mathf.Clamp(YawInput + YawAddAmount, -1, 1);
+                                YawInput = Mathf.Clamp(SteerInput, -1, 1);
                             }
                             else
                             {
@@ -596,49 +860,95 @@ namespace SaccFlightAndVehicles
                                 if (AutoSteer < 0)
                                 {
                                     SpeedSteeringLimitLower = Mathf.Min(SpeedSteeringLimitLower, AutoSteer - DesktopMinSteering);
+                                    YawInput = SteerInput * -SpeedSteeringLimitLower;
                                 }
                                 else
                                 {
                                     SpeedSteeringLimitUpper = Mathf.Max(SpeedSteeringLimitUpper, AutoSteer + DesktopMinSteering);
+                                    YawInput = SteerInput * SpeedSteeringLimitUpper;
                                 }
-                                YawInput = Mathf.Clamp(YawInput + YawAddAmount, SpeedSteeringLimitLower, SpeedSteeringLimitUpper);
                             }
                         }
                         else
                         {
-                            if (Drift_AutoSteer)
-                            { YawInput = Mathf.Lerp(YawInput, AutoSteer, VehicleSpeed * AutoSteerStrength * DeltaTime * GroundedwheelsRatio); }
+                            float YawAddAmount = SteerInput * DeltaTime * (1f / SteeringKeyboardSecsToMax);
+                            if (YawAddAmount != 0f)
+                            {
+                                if (SteeringMaxSpeedDTDisabled || _HandBrakeOn)//no steering limit when handbarke on
+                                {
+                                    YawInput = Mathf.Clamp(YawInput + YawAddAmount, -1, 1);
+                                }
+                                else
+                                {
+                                    float SpeedSteeringLimitUpper = 1 - (VehicleSpeed / SteeringMaxSpeedDT);
+                                    SpeedSteeringLimitUpper = Mathf.Clamp(SpeedSteeringLimitUpper, DesktopMinSteering, 1);
+                                    float SpeedSteeringLimitLower = -SpeedSteeringLimitUpper;
+
+                                    if (AutoSteer < 0)
+                                    {
+                                        SpeedSteeringLimitLower = Mathf.Min(SpeedSteeringLimitLower, AutoSteer - DesktopMinSteering);
+                                    }
+                                    else
+                                    {
+                                        SpeedSteeringLimitUpper = Mathf.Max(SpeedSteeringLimitUpper, AutoSteer + DesktopMinSteering);
+                                    }
+                                    YawInput = Mathf.Clamp(YawInput + YawAddAmount, SpeedSteeringLimitLower, SpeedSteeringLimitUpper);
+                                }
+                                if ((SteerInput > 0 && YawInput < 0) || SteerInput < 0 && YawInput > 0)
+                                {
+                                    YawInput = Mathf.MoveTowards(YawInput, 0f, (1f / SteeringReturnSpeedDT) * DeltaTime);
+                                }
+                            }
                             else
-                            { YawInput = Mathf.MoveTowards(YawInput, 0f, (1f / SteeringReturnSpeedDT) * DeltaTime); }
+                            {
+                                if (Drift_AutoSteer)
+                                { YawInput = Mathf.Lerp(YawInput, AutoSteer, 1 - Mathf.Pow(0.5f, VehicleSpeed * AutoSteerStrength * DeltaTime * GroundedwheelsRatio)); }
+                                else if (Bike_AutoSteer)
+                                {
+                                    float angle = Vector3.SignedAngle(VehicleTransform.up, Vector3.up, VehicleTransform.forward);
+                                    if (angle != angleLast)
+                                    {
+                                        // if ((angle > 0 && YawInput < 0) || (angle < 0 && YawInput > 0))
+                                        // {
+                                        //     YawInput = 0;
+                                        // }
+                                        YawInput += angle * Bike_AutoSteer_Strength * Time.deltaTime;
+                                        YawInput *= (angle - angleLast) * Bike_AutoSteer_CounterStrength * Time.deltaTime;
+                                        angleLast = angle;
+                                    }
+                                }
+                                else
+                                { YawInput = Mathf.MoveTowards(YawInput, 0f, (1f / SteeringReturnSpeedDT) * DeltaTime); }
+                            }
                         }
-                    }
-                    YawInput = Mathf.Clamp(YawInput, -1f, 1f);
+                        YawInput = Mathf.Clamp(YawInput, -1f, 1f);
 
-                    if (InVR)
-                    {
-                        ThrottleInput = Mathf.Min(VRThrottlePos + Wi, 1f);
-                        /*                                        else
-                                           {
-
-                                               float ReturnSpeedGrip = 1 - Mathf.Min(ThrottleGrip / GripSensitivity, 1f);
-                                               ThrottleInput = Mathf.MoveTowards(ThrottleInput, 0f, ReturnSpeedGrip * (1f / ThrottleReturnTimeVR) * DeltaTime);
-                                           } */
-                    }
-                    else
-                    {
-                        if (Wi != 0)
+                        if (InVR)
                         {
-                            ThrottleInput = Mathf.Clamp(VRThrottlePos + (Wi), -DriveSpeedKeyboardMax, DriveSpeedKeyboardMax);
+                            ThrottleInput = Mathf.Min(VRThrottlePos + Wi, 1f);
+                            /*                                        else
+                                               {
+
+                                                   float ReturnSpeedGrip = 1 - Mathf.Min(ThrottleGrip / GripSensitivity, 1f);
+                                                   ThrottleInput = Mathf.MoveTowards(ThrottleInput, 0f, ReturnSpeedGrip * (1f / ThrottleReturnTimeVR) * DeltaTime);
+                                               } */
                         }
                         else
                         {
-                            ThrottleInput = Mathf.MoveTowards(ThrottleInput, 0f, (1 / ThrottleReturnTimeDT) * DeltaTime);
+                            if (Wi != 0)
+                            {
+                                ThrottleInput = Mathf.Clamp(VRThrottlePos + (Wi), -DriveSpeedKeyboardMax, DriveSpeedKeyboardMax);
+                            }
+                            else
+                            {
+                                ThrottleInput = Mathf.MoveTowards(ThrottleInput, 0f, (1 / ThrottleReturnTimeDT) * DeltaTime);
+                            }
                         }
-                    }
-                    for (int i = 0; i < DriveWheels.Length; i++)
-                    {
-                        DriveWheels[i].SetProgramVariable("Clutch", Clutch);
-                        DriveWheels[i].SetProgramVariable("_GearRatio", GearRatio);
+                        for (int i = 0; i < DriveWheels.Length; i++)
+                        {
+                            DriveWheels[i].SetProgramVariable("Clutch", Clutch);
+                        }
+                        FinalThrottle = ThrottleInput;
                     }
                     if (Fuel > 0)
                     {
@@ -646,7 +956,12 @@ namespace SaccFlightAndVehicles
                         {
                             SendCustomNetworkEvent(VRC.Udon.Common.Interfaces.NetworkEventTarget.All, nameof(SetHasFuel));
                         }
-                        FinalThrottle = (MinThrottle + (ThrottleInput * ThrottleNormalizer));
+                        if (FinalThrottle < MinThrottle && Revs / RevLimiter < MinThrottle)
+                        {
+                            FinalThrottle = (MinThrottle - FinalThrottle) * MinThrottle_PStrength;
+                            //P Controller for throttle
+                        }
+                        Fuel = Mathf.Max(Fuel - (FuelConsumption * Time.deltaTime * (Revs / RevLimiter)), 0);
                     }
                     else
                     {
@@ -656,9 +971,8 @@ namespace SaccFlightAndVehicles
                         }
                         FinalThrottle = 0;
                     }
-                    Fuel -= Mathf.Max(FuelConsumption * Time.deltaTime * (Revs / RevLimiter), 0);
                 }
-                VehicleRigidbody.velocity = Vector3.Lerp(VehicleRigidbody.velocity, Vector3.zero, Drag * Time.deltaTime);
+                CurrentVel = VehicleRigidbody.velocity;//CurrentVel is set by SAV_SyncScript for non owners
             }
             else //TODO: Move this to an effects script / Have a timer to not do it while empty for more than 10s
             {
@@ -668,43 +982,101 @@ namespace SaccFlightAndVehicles
                 MovingForward = Vector3.Dot(VehicleTransform.forward, VehicleVel) < 0f;
             }
         }
+        public void UpdateGearRatio()
+        {
+            for (int i = 0; i < DriveWheels.Length; i++)
+            { DriveWheels[i].SetProgramVariable("_GearRatio", GearRatio); }
+        }
+        float Steps_Error;
+        [System.NonSerialized] public float GsAveragingTime = .1f;
+        private int NumFUinAvgTime = 1;
+        private Vector3 Gs_all;
+        private Vector3[] FrameGs;
+        private int GsFrameCheck;
         private void FixedUpdate()
         {
             if (!IsOwner) { return; }
             float DeltaTime = Time.fixedDeltaTime;
+            Vector3 absVel = VehicleRigidbody.velocity;
+            VehicleVel = absVel - LastTouchedTransform_Speed;
+            //calc Gs
+            float gravity = 9.81f * DeltaTime;
+            LastFrameVel.y -= gravity;
+            Vector3 Gs3 = VehicleTransform.InverseTransformDirection(VehicleVel - LastFrameVel);
+            Vector3 thisFrameGs = Gs3 / gravity;
+            Gs_all -= FrameGs[GsFrameCheck];
+            Gs_all += thisFrameGs;
+            FrameGs[GsFrameCheck] = thisFrameGs;
+            GsFrameCheck++;
+            if (GsFrameCheck >= NumFUinAvgTime) { GsFrameCheck = 0; }
+            AllGs = Gs_all.magnitude / NumFUinAvgTime;
+            LastFrameVel = VehicleVel;
+
             if (Piloting)
             {
-                Revs = Mathf.Max(Mathf.Lerp(Revs, 0f, EngineSlowDown * DeltaTime), 0f);
-                if (!LimitingRev)
+#if UNITY_EDITOR
+                revUpDT = 1f / NumStepsSec; // so adjusting in play mode works
+#endif
+                float engineTimeDif = Time.fixedTime - engineTime;
+                // works out the number of steps, 
+                int numupdates = (int)(engineTimeDif / revUpDT);
+                // make sure its even (if doing too many, less will be done next frame so it's okay)
+                if (numupdates % 2 != 0)
+                { numupdates++; }
+                // because the for loop starts at 0, the middle update is one less
+                int middleUpdate = (int)(numupdates / 2) - 1;
+                bool WheelUpdateDone = false;
+                for (int i = 0; i < numupdates; i++)
                 {
-                    Revs += FinalThrottle * DriveSpeed * DeltaTime * EngineResponseCurve.Evaluate(Revs / RevLimiter);
-                    if (Revs > RevLimiter)
+                    RevUp(); // increases revs based on EngineResponseCurve
+                    if (!WheelUpdateDone)
                     {
-                        Revs = RevLimiter;
-                        LimitingRev = true;
-                        SendCustomEventDelayedSeconds(nameof(ReEnableRevs), RevLimiterDelay);
+                        if (i == middleUpdate)
+                        {
+                            // Apply EngineForceUsed at the middle step (that's why we needed an even number)
+                            // This is required when applying delta time when iterating over a curve (integrals with deltatime)
+                            WheelUpdateDone = true;
+                            Revs = Mathf.Max(Revs - EngineForceUsed, 0);
+                            EngineForceUsed = 0;
+                        }
                     }
-                }
-                for (int i = 0; i < DriveWheels.Length; i++)
-                {
-                    DriveWheels[i].SetProgramVariable("EngineRevs", Revs);
                 }
             }
             else
             {
-                Revs = Mathf.Max(Mathf.Lerp(Revs, 0f, EngineSlowDown * DeltaTime), 0f);
+                Revs = Mathf.Max(Mathf.Lerp(Revs, 0f, 1 - Mathf.Pow(0.5f, DeltaTime * EngineSlowDown)), 0f);
             }
+            for (int i = 0; i < AllWheels.Length; i++)
+            { AllWheels[i].SendCustomEvent("Wheel_FixedUpdate"); }//EngineForceUsed is updated in this function
 
-            VehicleVel = VehicleRigidbody.velocity;
-            float gravity = 9.81f * DeltaTime;
-            LastFrameVel.y -= gravity; //add gravity
-            AllGs = Vector3.Distance(LastFrameVel, VehicleVel) / gravity;
-            GDamageToTake += Mathf.Max((AllGs - MaxGs), 0);
-            LastFrameVel = VehicleVel;
+            VehicleRigidbody.velocity = Vector3.Lerp(VehicleRigidbody.velocity, Vector3.zero, 1 - Mathf.Pow(0.5f, Drag * DeltaTime));
+        }
+        [System.NonSerialized] public float EngineForceUsed;
+        float revUpDT;
+        float engineTime;
+        private void RevUp()
+        {
+            engineTime += revUpDT;
+            Revs = Mathf.Max(Mathf.Lerp(Revs, 0f, 1 - Mathf.Pow(0.5f, revUpDT * EngineSlowDown)), 0f);
+            if (!LimitingRev)
+            {
+                Revs += FinalThrottle * DriveSpeed * revUpDT * EngineResponseCurve.Evaluate(Revs / RevLimiter);
+                if (Revs > RevLimiter)
+                {
+                    Revs = RevLimiter;
+                    LimitingRev = true;
+                    SendCustomEventDelayedSeconds(nameof(ReEnableRevs), RevLimiterDelay);
+                }
+            }
+        }
+        public void NetworkExplode()
+        {
+            SendCustomNetworkEvent(VRC.Udon.Common.Interfaces.NetworkEventTarget.All, nameof(Explode));
         }
         public void Explode()
         {
             if (EntityControl._dead) { return; }//can happen with prediction enabled if two people kill something at the same time
+            EntityControl.wrecked = true;//compatability
             EntityControl.dead = true;
             Health = FullHealth;
             HasFuel_ = true;
@@ -729,6 +1101,7 @@ namespace SaccFlightAndVehicles
         public void ReAppear()
         {
             EntityControl.SendEventToExtensions("SFEXT_G_ReAppear");
+            EntityControl.wrecked = false;//compatability
             if (IsOwner)
             {
                 if (!UsingManualSync)
@@ -745,9 +1118,33 @@ namespace SaccFlightAndVehicles
             VehicleRigidbody.velocity = Vector3.zero;
             //these could get set after death by lag, probably
             Health = FullHealth;
-            VehicleTransform.localPosition = Spawnposition;
-            VehicleTransform.localRotation = Spawnrotation;
+            SetRespawnPos();
             EntityControl.SendEventToExtensions("SFEXT_O_MoveToSpawn");
+        }
+        public void SetRespawnPos()
+        {
+            VehicleRigidbody.drag = 0;
+            VehicleRigidbody.angularDrag = 0;
+            VehicleRigidbody.angularVelocity = Vector3.zero;
+            VehicleRigidbody.velocity = Vector3.zero;
+            if (InEditor || UsingManualSync)
+            {
+                VehicleTransform.localPosition = EntityControl.Spawnposition;
+                VehicleTransform.localRotation = EntityControl.Spawnrotation;
+                VehicleRigidbody.position = VehicleTransform.position;
+                VehicleRigidbody.rotation = VehicleTransform.rotation;
+            }
+            else
+            {
+                if (EntityControl.EntityObjectSync) { EntityControl.EntityObjectSync.Respawn(); }
+            }
+            if (EntityControl.RespawnPoint)
+            {
+                VehicleTransform.position = EntityControl.RespawnPoint.position;
+                VehicleTransform.rotation = EntityControl.RespawnPoint.rotation;
+                VehicleRigidbody.position = VehicleTransform.position;
+                VehicleRigidbody.rotation = VehicleTransform.rotation;
+            }
         }
         public void NotDead()
         {
@@ -756,12 +1153,10 @@ namespace SaccFlightAndVehicles
         }
         [System.NonSerializedAttribute] public float FullHealth;
         //unused variables that are just here for compatability with SAV DFuncs.
-        [System.NonSerialized] public int OverrideConstantForce;
-        [System.NonSerialized] public Vector3 CFRelativeForceOverride;
-        [System.NonSerialized] public Vector3 CFRelativeTorqueOverride;
         [System.NonSerialized] public int DisablePhysicsAndInputs = 0;
         [System.NonSerialized] public int DisableTaxiRotation;
         [System.NonSerialized] public int DisableGroundDetection;
+        [System.NonSerialized] public int DisablePhysicsApplication;
         [System.NonSerialized] public int ThrottleOverridden;
         [System.NonSerialized] public int JoystickOverridden;
         [System.NonSerialized] public bool Taxiing = false;
@@ -770,73 +1165,63 @@ namespace SaccFlightAndVehicles
         [System.NonSerialized] public bool Occupied;
         [System.NonSerialized] public int NumPassengers;
         [System.NonSerializedAttribute] public bool IsOwner;
-        [System.NonSerializedAttribute] public bool UsingManualSync = true;
-        public void SFEXT_O_RespawnButton()//called when using respawn button
+        [System.NonSerializedAttribute] public bool UsingManualSync;
+        public void SFEXT_G_RespawnButton()//called globally when using respawn button
         {
-            VRCPlayerApi currentOwner = Networking.GetOwner(EntityControl.gameObject);
-            bool BlockedCheck = (currentOwner != null && currentOwner.GetBonePosition(HumanBodyBones.Hips) == Vector3.zero) && VehicleSpeed > .2f;
-            if (Occupied || EntityControl._dead || BlockedCheck) { return; }
-            Networking.SetOwner(localPlayer, EntityControl.gameObject);
-            SendCustomNetworkEvent(VRC.Udon.Common.Interfaces.NetworkEventTarget.All, nameof(ResetStatus));
-            IsOwner = true;
-            Fuel = FullFuel;
-            Health = FullHealth;
-            YawInput = 0;
-            AutoSteerLerper = 0;
-            if (InEditor || UsingManualSync)
+            if (IsOwner)
             {
-                VehicleTransform.localPosition = Spawnposition;
-                VehicleTransform.localRotation = Spawnrotation;
-                VehicleRigidbody.velocity = Vector3.zero;
+                IsOwner = true;
+                Fuel = FullFuel;
+                Health = FullHealth;
+                YawInput = 0;
+                AutoSteerLerper = 0;
+                SetRespawnPos();
             }
-            VehicleRigidbody.angularVelocity = Vector3.zero;//editor needs this
-        }
-        public void ResetStatus()//called globally when using respawn button
-        {
             EntityControl.dead = true;
             SendCustomEventDelayedSeconds(nameof(NotDead), InvincibleAfterSpawn);
-            EntityControl.SendEventToExtensions("SFEXT_G_RespawnButton");
         }
         public void SFEXT_O_TakeOwnership()
         {
             IsOwner = true;
             AllGs = 0;
-            GDamageToTake = 0f;
-            VehicleRigidbody.velocity = CurrentVel;
-            LastFrameVel = CurrentVel;
-            SetWheelIsOwner();
+            UpdateWheelIsOwner();
+            for (int i = 0; i < NumFUinAvgTime; i++) { FrameGs[i] = Vector3.zero; }
+            SetupGCalcValues();
         }
         public void SFEXT_O_LoseOwnership()
         {
             VehiclePosLastFrame = VehicleTransform.position;
             IsOwner = false;
-            SetWheelIsOwner();
+            UpdateWheelIsOwner();
         }
-        public void SetWheelIsOwner()
+        public void UpdateWheelIsOwner()
         {
-            for (int i = 0; i < DriveWheels.Length; i++)
+            if (IsOwner)
             {
-                DriveWheels[i].SetProgramVariable("IsOwner", IsOwner);
-                if (IsOwner)
+                for (int i = 0; i < DriveWheels.Length; i++)
                 {
                     Networking.SetOwner(Networking.LocalPlayer, DriveWheels[i].gameObject);
                 }
-            }
-            for (int i = 0; i < SteerWheels.Length; i++)
-            {
-                SteerWheels[i].SetProgramVariable("IsOwner", IsOwner);
-                if (IsOwner)
+                for (int i = 0; i < SteerWheels.Length; i++)
                 {
                     Networking.SetOwner(Networking.LocalPlayer, SteerWheels[i].gameObject);
                 }
-            }
-            for (int i = 0; i < OtherWheels.Length; i++)
-            {
-                OtherWheels[i].SetProgramVariable("IsOwner", IsOwner);
-                if (IsOwner)
+                for (int i = 0; i < OtherWheels.Length; i++)
                 {
                     Networking.SetOwner(Networking.LocalPlayer, OtherWheels[i].gameObject);
                 }
+            }
+            for (int i = 0; i < DriveWheels.Length; i++)
+            {
+                DriveWheels[i].SendCustomEvent("UpdateOwner");
+            }
+            for (int i = 0; i < SteerWheels.Length; i++)
+            {
+                SteerWheels[i].SendCustomEvent("UpdateOwner");
+            }
+            for (int i = 0; i < OtherWheels.Length; i++)
+            {
+                OtherWheels[i].SendCustomEvent("UpdateOwner");
             }
         }
         public void SetWheelDriver()
@@ -871,13 +1256,14 @@ namespace SaccFlightAndVehicles
         public void SFEXT_O_PilotEnter()
         {
             Piloting = true;
-            GDamageToTake = 0f;
+            engineTime = Time.fixedTime;
+            TANK_Cruising = false;
+            System.Array.Clear(TankThrottles, 0, 2);
             AllGs = 0f;
-            VehicleRigidbody.velocity = CurrentVel;
-            LastFrameVel = CurrentVel;
             InVR = EntityControl.InVR;
-            SetCollidersLayer(OnboardVehicleLayer);
+            SetCollidersLayer(EntityControl.OnboardVehicleLayer);
             SetWheelDriver();
+            SetupGCalcValues();
         }
         public void SFEXT_O_PilotExit()
         {
@@ -885,24 +1271,30 @@ namespace SaccFlightAndVehicles
             WheelGrippingLastFrame_toggleR = false;
             WheelReleaseCountR = 0;
             WheelGrabToggleR = false;
+            TANK_Cruising = false;
+            System.Array.Clear(TankThrottles, 0, 2);
             for (int i = 0; i < DriveWheels.Length; i++)
             {
                 DriveWheels[i].SetProgramVariable("EngineRevs", 0f);
             }
-            SetCollidersLayer(OutsideVehicleLayer);
+            for (int i = 0; i < SteerWheels.Length; i++)
+            {
+                SteerWheels[i].SetProgramVariable("EngineRevs", 0f);//for TankMode
+            }
+            SetCollidersLayer(EntityControl.OutsideVehicleLayer);
             if (!EntityControl.MySeatIsExternal) { localPlayer.SetVelocity(CurrentVel); }
             SetWheelDriver();
         }
         public void SFEXT_P_PassengerEnter()
         {
             Passenger = true;
-            SetCollidersLayer(OnboardVehicleLayer);
+            SetCollidersLayer(EntityControl.OnboardVehicleLayer);
         }
         public void SFEXT_P_PassengerExit()
         {
             Passenger = false;
             if (!EntityControl.MySeatIsExternal) { localPlayer.SetVelocity(CurrentVel); }
-            SetCollidersLayer(OutsideVehicleLayer);
+            SetCollidersLayer(EntityControl.OutsideVehicleLayer);
         }
         public void SFEXT_G_PassengerEnter()
         {
@@ -926,42 +1318,39 @@ namespace SaccFlightAndVehicles
             VehicleRigidbody.useGravity = true;
             Sleeping = false;
         }
-        public void SendBulletHit()
-        {
-            EntityControl.SendEventToExtensions("SFEXT_G_BulletHit");
-        }
         public void SFEXT_L_BulletHit()
         {
             if (PredictDamage)
             {
                 if (Time.time - LastHitTime > 2)
                 {
-                    PredictedHealth = Health - BulletDamageTaken;
+                    PredictedHealth = Health - (BulletDamageTaken * EntityControl.LastHitBulletDamageMulti);
+                    LastHitTime = Time.time;//must be updated before sending explode() for checks in explode event to work
                     if (PredictedHealth <= 0)
                     {
-                        SendCustomNetworkEvent(VRC.Udon.Common.Interfaces.NetworkEventTarget.All, nameof(Explode));
+                        EntityControl.SendEventToExtensions("SFEXT_O_GunKill");
+                        NetworkExplode();
                     }
                 }
                 else
                 {
-                    PredictedHealth -= BulletDamageTaken;
+                    PredictedHealth -= BulletDamageTaken * EntityControl.LastHitBulletDamageMulti;
+                    LastHitTime = Time.time;
                     if (PredictedHealth <= 0)
                     {
-                        SendCustomNetworkEvent(VRC.Udon.Common.Interfaces.NetworkEventTarget.All, nameof(Explode));
+                        EntityControl.SendEventToExtensions("SFEXT_O_GunKill");
+                        NetworkExplode();
                     }
                 }
-                LastHitTime = Time.time;
             }
-            SendCustomNetworkEvent(VRC.Udon.Common.Interfaces.NetworkEventTarget.All, nameof(SendBulletHit));
         }
         public void SFEXT_G_BulletHit()
         {
             if (!EntityControl._dead)
             {
-                LastHitTime = Time.time;
                 if (IsOwner)
                 {
-                    Health -= BulletDamageTaken;
+                    Health -= BulletDamageTaken * EntityControl.LastHitBulletDamageMulti;
                     if (PredictDamage && Health <= 0)//the attacker calls the explode function in this case
                     {
                         Health = 0.0911f;
@@ -978,7 +1367,7 @@ namespace SaccFlightAndVehicles
                 //Check if we still have the amount of health set to not send explode when killed, and if we do send explode
                 if (Health == 0.0911f)
                 {
-                    SendCustomNetworkEvent(VRC.Udon.Common.Interfaces.NetworkEventTarget.All, nameof(Explode));
+                    NetworkExplode();
                 }
             }
         }
@@ -987,13 +1376,26 @@ namespace SaccFlightAndVehicles
         public void SFEXT_L_OnCollisionEnter()
         {
             if (!IsOwner) { return; }
-            LastCollisionTime = Time.time;
-            if (Time.time - LastCollisionTime < MinCollisionSoundDelay)
+            Collision col = EntityControl.LastCollisionEnter;
+            if (col == null) { return; }
+            float colmag = col.impulse.magnitude / VehicleRigidbody.mass;
+            float colmag_dmg = colmag;
+            if (colmag_dmg > Crash_Damage_Speed)
             {
-                LastCollisionTime = Time.time;
-                Collision col = EntityControl.LastCollisionEnter;
-                if (col == null) { return; }
-                float colmag = col.impulse.magnitude / VehicleRigidbody.mass;
+                if (colmag_dmg < Crash_Death_Speed)
+                {
+                    float dif = Crash_Death_Speed - Crash_Damage_Speed;
+                    float newcolT = (colmag_dmg - Crash_Damage_Speed) / dif;
+                    colmag_dmg = Mathf.Lerp(0, Crash_Death_Speed, newcolT);
+                }
+                float thisGDMG = (colmag_dmg / Crash_Death_Speed) * FullHealth;
+                Health -= thisGDMG;
+
+                if (Health <= 0 && thisGDMG > FullHealth * 0.5f)
+                { NetworkExplode(); }
+            }
+            if (Time.time - LastCollisionTime > MinCollisionSoundDelay)
+            {
                 if (colmag > BigCrashSpeed)
                 {
                     SendCustomNetworkEvent(VRC.Udon.Common.Interfaces.NetworkEventTarget.All, nameof(SendBigCrash));
@@ -1007,6 +1409,7 @@ namespace SaccFlightAndVehicles
                     SendCustomNetworkEvent(VRC.Udon.Common.Interfaces.NetworkEventTarget.All, nameof(SendSmallCrash));
                 }
             }
+            LastCollisionTime = Time.time;
         }
         public void SendSmallCrash()
         {
@@ -1020,24 +1423,34 @@ namespace SaccFlightAndVehicles
         {
             EntityControl.SendEventToExtensions("SFEXT_G_BigCrash");
         }
-        public void SFEXT_O_ReSupply()
+        public void SFEXT_G_ReSupply()
         {
-            SendCustomNetworkEvent(VRC.Udon.Common.Interfaces.NetworkEventTarget.All, nameof(ReSupply));
-        }
-        public void ReSupply()
-        {
-            ReSupplied = 0;//used to know if other scripts resupplied
-            if ((Fuel < FullFuel - 10 || Health != FullHealth))
+            if ((Fuel < FullFuel - 10) || (Health != FullHealth))
             {
-                ReSupplied++;//used to only play the sound if we're actually repairing/getting ammo/fuel
+                EntityControl.ReSupplied++;//used to only play the sound if we're actually repairing/getting ammo/fuel
             }
-            EntityControl.SendEventToExtensions("SFEXT_G_ReSupply");//extensions increase the ReSupplied value too
-
-            LastResupplyTime = Time.time;
 
             if (IsOwner)
             {
                 Fuel = Mathf.Min(Fuel + (FullFuel / RefuelTime), FullFuel);
+                Health = Mathf.Min(Health + (FullHealth / RepairTime), FullHealth);
+            }
+        }
+        public void SFEXT_G_ReFuel()
+        {
+            if (Fuel < FullFuel - 10)
+            { EntityControl.ReSupplied++; }
+            if (IsOwner)
+            {
+                Fuel = Mathf.Min(Fuel + (FullFuel / RefuelTime), FullFuel);
+            }
+        }
+        public void SFEXT_G_RePair()
+        {
+            if (Health != FullHealth)
+            { EntityControl.ReSupplied++; }
+            if (IsOwner)
+            {
                 Health = Mathf.Min(Health + (FullHealth / RepairTime), FullHealth);
             }
         }
@@ -1234,6 +1647,54 @@ namespace SaccFlightAndVehicles
                     }
                 }
                 WheelGripLastFrameL = false;
+            }
+        }
+        private bool RepeatingWorldCheckAxis;
+        public void DoRepeatingWorld()
+        {
+            if (RepeatingWorld)
+            {
+                if (RepeatingWorldCheckAxis)
+                {
+                    if (Mathf.Abs(CenterOfMass.position.z) > RepeatingWorldDistance)
+                    {
+                        if (CenterOfMass.position.z > 0)
+                        {
+                            Vector3 vehpos = VehicleTransform.position;
+                            vehpos.z -= RepeatingWorldDistance * 2;
+                            VehicleTransform.position = vehpos;
+                            VehicleRigidbody.position = VehicleTransform.position;
+                        }
+                        else
+                        {
+                            Vector3 vehpos = VehicleTransform.position;
+                            vehpos.z += RepeatingWorldDistance * 2;
+                            VehicleTransform.position = vehpos;
+                            VehicleRigidbody.position = VehicleTransform.position;
+                        }
+                    }
+                }
+                else
+                {
+                    if (Mathf.Abs(CenterOfMass.position.x) > RepeatingWorldDistance)
+                    {
+                        if (CenterOfMass.position.x > 0)
+                        {
+                            Vector3 vehpos = VehicleTransform.position;
+                            vehpos.x -= RepeatingWorldDistance * 2;
+                            VehicleTransform.position = vehpos;
+                            VehicleRigidbody.position = VehicleTransform.position;
+                        }
+                        else
+                        {
+                            Vector3 vehpos = VehicleTransform.position;
+                            vehpos.x += RepeatingWorldDistance * 2;
+                            VehicleTransform.position = vehpos;
+                            VehicleRigidbody.position = VehicleTransform.position;
+                        }
+                    }
+                }
+                RepeatingWorldCheckAxis = !RepeatingWorldCheckAxis;//Check one axis per frame
             }
         }
     }

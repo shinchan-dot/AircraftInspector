@@ -28,8 +28,10 @@ namespace SaccFlightAndVehicles
             }
             get => _smokeon;
         }
-        private SaccEntity EntityControl;
-        private bool UseLeftTrigger = false;
+        [System.NonSerializedAttribute] public bool LeftDial = false;
+        [System.NonSerializedAttribute] public int DialPosition = -999;
+        [System.NonSerializedAttribute] public SaccEntity EntityControl;
+        [System.NonSerializedAttribute] public SAV_PassengerFunctionsController PassengerFunctionsControl;
         private VRCPlayerApi localPlayer;
         private bool TriggerLastFrame;
         private float SmokeHoldTime;
@@ -43,17 +45,13 @@ namespace SaccFlightAndVehicles
         private Vector3 TempSmokeCol = Vector3.zero;
         private bool Pilot;
         private bool Selected;
-        private bool InEditor; private int DialPosition;
-        private bool LeftDial;
+        private bool InEditor;
         private float LastSerialization;
         private Transform ControlsRoot;
-        public void DFUNC_LeftDial() { UseLeftTrigger = true; }
-        public void DFUNC_RightDial() { UseLeftTrigger = false; }
         public void SFEXT_L_EntityStart()
         {
             localPlayer = Networking.LocalPlayer;
             InEditor = localPlayer == null;
-            EntityControl = (SaccEntity)SAVControl.GetProgramVariable("EntityControl");
             ControlsRoot = (Transform)SAVControl.GetProgramVariable("ControlsRoot");
             if (Dial_Funcon) Dial_Funcon.SetActive(false);
             int NumSmokes = DisplaySmoke.Length;
@@ -61,7 +59,6 @@ namespace SaccFlightAndVehicles
 
             for (int x = 0; x < DisplaySmokeem.Length; x++)
             { DisplaySmokeem[x] = DisplaySmoke[x].emission; }
-            FindSelf();
         }
         public void DFUNC_Selected()
         {
@@ -122,7 +119,7 @@ namespace SaccFlightAndVehicles
                 if (Selected)
                 {
                     float Trigger;
-                    if (UseLeftTrigger)
+                    if (LeftDial)
                     { Trigger = Input.GetAxisRaw("Oculus_CrossPlatform_PrimaryIndexTrigger"); }
                     else
                     { Trigger = Input.GetAxisRaw("Oculus_CrossPlatform_SecondaryIndexTrigger"); }
@@ -174,7 +171,7 @@ namespace SaccFlightAndVehicles
                         SmokeColorLast = SmokeColor;
                     }
                     //Smoke Color Indicator
-                    SmokeColorIndicatorMaterial.color = SmokeColor_Color;
+                    if (SmokeColorIndicatorMaterial) { SmokeColorIndicatorMaterial.color = SmokeColor_Color; }
                 }
             }
             if (localSmoking && AllowChangeColor)
@@ -190,19 +187,15 @@ namespace SaccFlightAndVehicles
         }
         public void KeyboardInput()
         {
-            if (LeftDial)
+            if (PassengerFunctionsControl)
             {
-                if (EntityControl.LStickSelection == DialPosition)
-                { EntityControl.LStickSelection = -1; }
-                else
-                { EntityControl.LStickSelection = DialPosition; }
+                if (LeftDial) PassengerFunctionsControl.ToggleStickSelectionLeft(this);
+                else PassengerFunctionsControl.ToggleStickSelectionRight(this);
             }
             else
             {
-                if (EntityControl.RStickSelection == DialPosition)
-                { EntityControl.RStickSelection = -1; }
-                else
-                { EntityControl.RStickSelection = DialPosition; }
+                if (LeftDial) EntityControl.ToggleStickSelectionLeft(this);
+                else EntityControl.ToggleStickSelectionRight(this);
             }
         }
         public void SetSmoking(bool smoking)
@@ -212,7 +205,7 @@ namespace SaccFlightAndVehicles
             for (int x = 0; x < DisplaySmokeem.Length; x++)
             { DisplaySmokeem[x].enabled = smoking; }
             if (Dial_Funcon) Dial_Funcon.SetActive(smoking);
-            if ((bool)SAVControl.GetProgramVariable("IsOwner"))
+            if (EntityControl.IsOwner)
             {
                 if (smoking)
                 { EntityControl.SendEventToExtensions("SFEXT_G_SmokeOn"); }
@@ -227,41 +220,15 @@ namespace SaccFlightAndVehicles
                 SendCustomNetworkEvent(VRC.Udon.Common.Interfaces.NetworkEventTarget.All, nameof(SetNotActive));
             }
         }
-        public override void OnPlayerJoined(VRCPlayerApi player)
+        public void SFEXT_O_OnPlayerJoined()
         {
-            if ((bool)SAVControl.GetProgramVariable("IsOwner"))
+            if (EntityControl.IsOwner)
             {
                 if (localSmoking)
                 {
                     SendCustomNetworkEvent(VRC.Udon.Common.Interfaces.NetworkEventTarget.All, nameof(SetActive));
                 }
             }
-        }
-        private void FindSelf()
-        {
-            int x = 0;
-            foreach (UdonSharpBehaviour usb in EntityControl.Dial_Functions_R)
-            {
-                if (this == usb)
-                {
-                    DialPosition = x;
-                    return;
-                }
-                x++;
-            }
-            LeftDial = true;
-            x = 0;
-            foreach (UdonSharpBehaviour usb in EntityControl.Dial_Functions_L)
-            {
-                if (this == usb)
-                {
-                    DialPosition = x;
-                    return;
-                }
-                x++;
-            }
-            DialPosition = -999;
-            Debug.LogWarning("DFUNC_AAM: Can't find self in dial functions");
         }
     }
 }

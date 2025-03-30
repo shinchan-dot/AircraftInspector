@@ -10,18 +10,21 @@ namespace SaccFlightAndVehicles
     [UdonBehaviourSyncMode(BehaviourSyncMode.None)]
     public class SaccVehicleEnterer : UdonSharpBehaviour
     {
+        public TextMeshProUGUI PilotName;
+        public TextMeshProUGUI MessageText;
+        [Header("For Debug (autofilled):")]
         public Transform[] AllPlanes;
-        private VRCPlayerApi localPlayer;
         void Start()
         {
             players_choosepilot = new VRCPlayerApi[100];
             localPlayer = Networking.LocalPlayer;
+            if (MessageText) MessageText.gameObject.SetActive(false);
         }
 
-        private int MyPilotID;//if this pilot enters, enter 2nd seat
-        private int MyPilotCheck;//if this pilot enters, enter 2nd seat
+        private int MyPilotID;
+        private int MyPilotCheck;
         private VRCPlayerApi[] players_choosepilot;
-        public TextMeshProUGUI PilotName;
+        private VRCPlayerApi localPlayer;
         public void NextPilot()
         {
             int numPlayers = 0;
@@ -45,7 +48,7 @@ namespace SaccFlightAndVehicles
                 {
                     if (newMyPilot == localPlayer)
                     {
-                        MyPilotID = -1;
+                        MyPilotID = -2;
                         PilotName.text = "Choose Pilot";
                         break;
                     }
@@ -63,7 +66,7 @@ namespace SaccFlightAndVehicles
                 {
                     MyPilotCheck = numPlayers;
                     PilotName.text = "Choose Pilot";
-                    MyPilotID = -1;
+                    MyPilotID = -2;
                     break;
                 }
             }
@@ -92,7 +95,7 @@ namespace SaccFlightAndVehicles
                 {
                     if (newMyPilot == localPlayer)
                     {
-                        MyPilotID = -1;
+                        MyPilotID = -2; // -1 is means no player in seat on the entity's SeatedPlayers array
                         PilotName.text = "Choose Pilot";
                         break;
                     }
@@ -110,23 +113,33 @@ namespace SaccFlightAndVehicles
                 {
                     MyPilotCheck = numPlayers;
                     PilotName.text = "Choose Pilot";
-                    MyPilotID = -1;
+                    MyPilotID = -2;
                     break;
                 }
             }
         }
         public void EnterVehicle()
         {
+            if (MyPilotID == -2)
+            {
+                if (MessageText) MessageText.gameObject.SetActive(true);
+                if (MessageText) MessageText.text = "Choose a Pilot";
+                numMessages++;
+                SendCustomEventDelayedSeconds(nameof(DisableMessage), 0.5f);
+                return;
+            }
             bool breaknow = false;
+            bool vehicleFull = false;
             for (int i = 0; i < AllPlanes.Length; i++)
             {
                 if (breaknow) { break; }
                 SaccEntity ve = AllPlanes[i].GetComponent<SaccEntity>();
                 if (ve)
                 {
-                    if (ve.Occupied)
+                    for (int j = 0; j < ve.SeatedPlayers.Length; j++)
                     {
-                        if (ve.UsersID == MyPilotID)
+                        if (breaknow) { break; }
+                        if (ve.SeatedPlayers[j] == MyPilotID)
                         {
                             var seats = ve.VehicleSeats;
                             if (seats.Length > 1)
@@ -136,15 +149,41 @@ namespace SaccFlightAndVehicles
                                     if (!seats[o].SeatOccupied)
                                     {
                                         seats[o].Interact();
-                                        breaknow = true;
-                                        break;
+                                        return;
                                     }
                                 }
+                                vehicleFull = true;
+                                breaknow = true;
+                                break;
                             }
+                            vehicleFull = true;
+                            breaknow = true;
+                            break;
                         }
                     }
                 }
             }
+            if (vehicleFull)
+            {
+                if (MessageText) MessageText.gameObject.SetActive(true);
+                if (MessageText) MessageText.text = "Vehicle Full";
+                numMessages++;
+                SendCustomEventDelayedSeconds(nameof(DisableMessage), 0.5f);
+            }
+            else
+            {
+                if (MessageText) MessageText.gameObject.SetActive(true);
+                if (MessageText) MessageText.text = "Not In Vehicle";
+                numMessages++;
+                SendCustomEventDelayedSeconds(nameof(DisableMessage), 0.5f);
+            }
+        }
+        int numMessages;
+        public void DisableMessage()
+        {
+            numMessages--;
+            if (numMessages != 0) return;
+            if (MessageText) MessageText.gameObject.SetActive(false);
         }
         public override void OnPlayerLeft(VRCPlayerApi player)
         {

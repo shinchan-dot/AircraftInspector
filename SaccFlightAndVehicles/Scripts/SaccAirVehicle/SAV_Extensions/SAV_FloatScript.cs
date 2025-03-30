@@ -74,6 +74,7 @@ namespace SaccFlightAndVehicles
         private bool InEditor = false;
         private float FloatDiameter;
         private int FPLength;
+        [System.NonSerializedAttribute] public SaccEntity EntityControl;
         void Start()
         {
             if (!SAVControl)
@@ -86,7 +87,7 @@ namespace SaccFlightAndVehicles
             _floatForce = FloatForce;
 
             localPlayer = Networking.LocalPlayer;
-            if (localPlayer == null)
+            if (!Utilities.IsValid(localPlayer))
             { InEditor = true; }
 
             VehicleTransform = VehicleRigidbody.transform;
@@ -105,7 +106,7 @@ namespace SaccFlightAndVehicles
                 FloatTouchWaterPoint[i] = float.MinValue;
                 FloatLastRayHitHeight[i] = float.MinValue;
             }
-            if (!HoverBike && (InEditor || localPlayer.isMaster))
+            if (!HoverBike && (InEditor || EntityControl.IsOwner))
             {
                 gameObject.SetActive(true);
             }
@@ -134,7 +135,7 @@ namespace SaccFlightAndVehicles
         }
         public void SFEXT_G_EngineOff()
         {
-            if ((bool)SAVControl.GetProgramVariable("IsOwner"))
+            if (EntityControl.IsOwner)
             {
                 if (HoverBike) { gameObject.SetActive(false); }
             }
@@ -163,6 +164,31 @@ namespace SaccFlightAndVehicles
             {
                 FindDepth(i);
             }
+        }
+        float SimpleSurfaceHeight;
+        public float FindDepthSimple()
+        {
+            float result;
+            RaycastHit checkhit;
+            if (Physics.Raycast(EntityControl.CenterOfMass.position, Vector3.up, out checkhit, Mathf.Infinity, FloatLayers, QueryTriggerInteraction.Collide))
+            {
+                if (Physics.Raycast(checkhit.point, -Vector3.up, out checkhit, Mathf.Infinity, FloatLayers, QueryTriggerInteraction.Collide))
+                {
+                    result = checkhit.point.y;
+                }
+                else
+                { result = float.MinValue; }
+            }
+            else
+            {
+                if (Physics.Raycast(EntityControl.CenterOfMass.position + (Vector3.up * 100f), -Vector3.up, out checkhit, Mathf.Infinity, FloatLayers, QueryTriggerInteraction.Collide))
+                {
+                    result = checkhit.point.y;
+                }
+                else
+                { result = float.MinValue; }
+            }
+            return result;
         }
         public void FindDepth(int i)
         {

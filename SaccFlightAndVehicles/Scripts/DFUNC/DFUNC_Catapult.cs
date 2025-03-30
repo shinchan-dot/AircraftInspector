@@ -1,4 +1,3 @@
-
 using UdonSharp;
 using UnityEngine;
 using VRC.SDKBase;
@@ -6,6 +5,7 @@ using VRC.Udon;
 
 namespace SaccFlightAndVehicles
 {
+    [DefaultExecutionOrder(10000)]
     [UdonBehaviourSyncMode(BehaviourSyncMode.NoVariableSync)]
     public class DFUNC_Catapult : UdonSharpBehaviour
     {
@@ -21,9 +21,19 @@ namespace SaccFlightAndVehicles
         public int CatapultLayer = 24;
         [Tooltip("Reference to the landing gear function so we can tell it to be disabled when on a catapult")]
         public UdonSharpBehaviour GearFunc;
+        [Tooltip("Allow Catapult to be used not as DFUNC, just launch automatically")]
+        public bool AutoLaunch = false;
+        [Tooltip("Launch automatically only after going to full throttle? (SAV only)")]
+        public bool AutoLaunch_FullThrottle = false;
+        [Tooltip("How long after attaching does it take to launch automatically? Should have a minimum of about 1 to allow time for sync")]
+        [SerializeField] private float AutoLaunchDelay = 1f;
         public string AnimTriggerLaunchName = "catapultlaunch";
-        private SaccEntity EntityControl;
-        private bool UseLeftTrigger = false;
+        [Tooltip("Align vehicle to catapult when attaching to it?")]
+        [SerializeField] private bool AlignToCatapult = true;
+        [System.NonSerializedAttribute] public bool LeftDial = false;
+        [System.NonSerializedAttribute] public int DialPosition = -999;
+        [System.NonSerializedAttribute] public SaccEntity EntityControl;
+        [System.NonSerializedAttribute] public SAV_PassengerFunctionsController PassengerFunctionsControl;
         private bool TriggerLastFrame;
         private bool Selected;
         [System.NonSerializedAttribute] public bool OnCatapult;
@@ -31,7 +41,6 @@ namespace SaccFlightAndVehicles
         private bool Piloting = false;
         private Transform VehicleTransform;
         [System.NonSerializedAttribute] public Transform CatapultTransform;
-        private int CatapultDeadTimer;
         private Rigidbody VehicleRigidbody;
         private float InVehicleThrustVolumeFactor;
         private Animator VehicleAnimator;
@@ -40,23 +49,43 @@ namespace SaccFlightAndVehicles
         private Quaternion CatapultRotLastFrame;
         private Vector3 CatapultPosLastFrame;
         private Animator CatapultAnimator;
+        BoxCollider thisCollider;
         //these bools exist to make sure this script only ever adds/removes 1 from the value in enginecontroller
         private bool DisableTaxiRotation = false;
         private bool DisableGearToggle = false;
-        private bool OverrideConstantForce = false;
+        private bool DisablePhysicsApplication = false;
         private bool InEditor;
         private bool IsOwner;
-        public void DFUNC_LeftDial() { UseLeftTrigger = true; }
-        public void DFUNC_RightDial() { UseLeftTrigger = false; }
+        private float AttachTime;
+        private float FullThrottleTime;
+        private bool Launching_AB;
         public void SFEXT_L_EntityStart()
         {
             InEditor = Networking.LocalPlayer == null;
             if (Dial_Funcon) { Dial_Funcon.SetActive(false); }
-            EntityControl = (SaccEntity)SAVControl.GetProgramVariable("EntityControl");
             VehicleTransform = EntityControl.transform;
             VehicleRigidbody = EntityControl.GetComponent<Rigidbody>();
             VehicleAnimator = EntityControl.GetComponent<Animator>();
-            IsOwner = (bool)SAVControl.GetProgramVariable("IsOwner");
+            thisCollider = GetComponent<BoxCollider>();
+            {
+                IsOwner = EntityControl.IsOwner;
+            }
+            colliderSmall();
+        }
+        // non-owners have a bigger collider so that they can find catapults if the position isn't synced perfectly
+        void colliderLarge()
+        {
+            Vector3 colSize = thisCollider.size;
+            colSize.x = 8;
+            colSize.z = 40;
+            thisCollider.size = colSize;
+        }
+        void colliderSmall()
+        {
+            Vector3 colSize = thisCollider.size;
+            colSize.x = 0;
+            colSize.z = 0;
+            thisCollider.size = colSize;
         }
         public void DFUNC_Selected()
         {
@@ -70,8 +99,14 @@ namespace SaccFlightAndVehicles
         public void SFEXT_O_PilotEnter()
         {
             gameObject.SetActive(true);
+            enabledToFindAnimator = false;
             Piloting = true;
             DisableOverrides();
+        }
+        public void SFEXT_G_PilotExit()
+        {
+            if (OnCatapult)
+                CatapultLockOff();
         }
         public void SFEXT_O_PilotExit()
         {
@@ -79,7 +114,6 @@ namespace SaccFlightAndVehicles
             {
                 gameObject.SetActive(false);
                 Piloting = false;
-                if (OnCatapult) { SendCustomNetworkEvent(VRC.Udon.Common.Interfaces.NetworkEventTarget.All, nameof(CatapultLockOff)); }
             }
             Selected = false;
             DisableOverrides();
@@ -91,7 +125,7 @@ namespace SaccFlightAndVehicles
         public void SFEXT_O_TakeOwnership()
         {
             IsOwner = true;
-            if (OnCatapult) { SendCustomNetworkEvent(VRC.Udon.Common.Interfaces.NetworkEventTarget.All, nameof(CatapultLockOff)); }
+            colliderSmall();
         }
         public void SFEXT_O_LoseOwnership()
         {
@@ -111,22 +145,29 @@ namespace SaccFlightAndVehicles
         {
             if (Dial_Funcon) { Dial_Funcon.SetActive(false); }
         }
-        private void EnableOneFrameToFindAnimator()
+        bool enabledToFindAnimator;
+        private void EnableToFindAnimator()
         {
             if (!IsOwner)
             {
+                enabledToFindAnimator = true;
+                colliderLarge();
                 gameObject.SetActive(true);
-                SendCustomEventDelayedFrames(nameof(DisableThisObjNonOnwer), 1);
+                SendCustomEventDelayedSeconds(nameof(FindAnimator_Disable), 3f);
             }
         }
-        private void DisableThisObjNonOnwer()
+        public void FindAnimator_Disable()
         {
-            if (!IsOwner)
-            { gameObject.SetActive(false); }
+            if (enabledToFindAnimator)
+            {
+                colliderSmall();
+                enabledToFindAnimator = false;
+                gameObject.SetActive(false);
+            }
         }
         private bool FindCatapultAnimator(GameObject other)
         {
-            if (OnCatapult) { return false; }//Why is this needed?
+            if (OnCatapult && CatapultAnimator) return true;
             GameObject CatapultObjects = other.gameObject;
             CatapultAnimator = null;
             CatapultAnimator = other.GetComponent<Animator>();
@@ -135,11 +176,12 @@ namespace SaccFlightAndVehicles
                 CatapultObjects = CatapultObjects.transform.parent.gameObject;
                 CatapultAnimator = CatapultObjects.GetComponent<Animator>();
             }
-            return (CatapultAnimator != null);
+            return CatapultAnimator != null;
         }
         private void OnTriggerEnter(Collider other)
         {
-            if (Piloting && !EntityControl._dead)
+            if (EntityControl._dead) return;
+            if (Piloting)
             {
                 if (!OnCatapult)
                 {
@@ -153,28 +195,40 @@ namespace SaccFlightAndVehicles
                                 //Hit detected, check if the plane is facing in the right direction..
                                 if (Vector3.Angle(VehicleTransform.forward, CatapultTransform.transform.forward) < MaxAttachAngle)
                                 {
+                                    OnCatapult = true;
+                                    AttachTime = Time.time;
+                                    Launching_AB = false;
                                     CatapultPosLastFrame = CatapultTransform.position;
                                     //then lock the plane to the catapult! Works with the catapult in any orientation whatsoever.
                                     //match plane rotation to catapult excluding pitch because some planes have shorter front or back wheels
-                                    Quaternion newrotation = Quaternion.Euler(new Vector3(VehicleTransform.rotation.eulerAngles.x, CatapultTransform.rotation.eulerAngles.y, CatapultTransform.rotation.eulerAngles.z));
-                                    //flip the plane 360 degrees if the quaternion is the wrong way round, so that syncscript doesnt make other players see you do a 360
-                                    bool InvertQuat = Quaternion.Dot(VehicleTransform.rotation, newrotation) < 0;
-                                    VehicleTransform.rotation = newrotation;
-                                    if (InvertQuat)
+
+                                    if (AlignToCatapult)
                                     {
-                                        VehicleTransform.Rotate(new Vector3(0, 360, 0));
+                                        Quaternion newrotation = Quaternion.Euler(new Vector3(VehicleTransform.rotation.eulerAngles.x, CatapultTransform.rotation.eulerAngles.y, CatapultTransform.rotation.eulerAngles.z));
+                                        if (Quaternion.Dot(VehicleTransform.rotation, newrotation) < 0)
+                                        {
+                                            //flip to match the quat so we don't get messed up interpolations on remote clients
+                                            newrotation = newrotation * Quaternion.Euler(0, 360, 0);
+                                        }
+                                        VehicleTransform.rotation = newrotation;
+                                        //move the plane to the catapult, excluding the y component (relative to the catapult), so we are 'above' it
+
+                                        float PlaneCatapultUpDistance = CatapultTransform.transform.InverseTransformDirection(CatapultTransform.position - VehicleTransform.position).y;
+                                        VehicleTransform.position = CatapultTransform.position - (CatapultTransform.up * PlaneCatapultUpDistance);
+                                        //move the plane back so that the catapult is aligned to the catapult detector
+                                        float PlaneCatapultBackDistance = VehicleTransform.InverseTransformDirection(VehicleTransform.position - transform.position).z;
+                                        VehicleTransform.position += CatapultTransform.forward * PlaneCatapultBackDistance;
+                                        PlaneCatapultOffset = -(CatapultTransform.up * PlaneCatapultUpDistance) + (CatapultTransform.forward * PlaneCatapultBackDistance);
+                                        PlaneCatapultRotDif = VehicleTransform.rotation * Quaternion.Inverse(CatapultTransform.rotation);
+
+                                        VehicleRigidbody.position = VehicleTransform.position;
+                                        VehicleRigidbody.rotation = VehicleTransform.rotation;
                                     }
-                                    //move the plane to the catapult, excluding the y component (relative to the catapult), so we are 'above' it
-                                    float PlaneCatapultUpDistance = CatapultTransform.transform.InverseTransformDirection(CatapultTransform.position - VehicleTransform.position).y;
-                                    VehicleTransform.position = CatapultTransform.position;
-                                    VehicleTransform.position -= CatapultTransform.up * PlaneCatapultUpDistance;
-
-                                    //move the plane back so that the catapult is aligned to the catapult detector
-                                    float PlaneCatapultBackDistance = VehicleTransform.InverseTransformDirection(VehicleTransform.position - transform.position).z;
-                                    VehicleTransform.position += CatapultTransform.forward * PlaneCatapultBackDistance;
-
-                                    PlaneCatapultOffset = -(CatapultTransform.up * PlaneCatapultUpDistance) + (CatapultTransform.forward * PlaneCatapultBackDistance);
-                                    PlaneCatapultRotDif = VehicleTransform.rotation * Quaternion.Inverse(CatapultTransform.rotation);
+                                    else
+                                    {
+                                        PlaneCatapultOffset = VehicleTransform.position - CatapultTransform.position;
+                                        PlaneCatapultRotDif = VehicleTransform.rotation * Quaternion.Inverse(CatapultTransform.rotation);
+                                    }
 
                                     if (!DisableGearToggle && GearFunc)
                                     {
@@ -186,16 +240,14 @@ namespace SaccFlightAndVehicles
                                         SAVControl.SetProgramVariable("DisableTaxiRotation", (int)SAVControl.GetProgramVariable("DisableTaxiRotation") + 1);
                                         DisableTaxiRotation = true;
                                     }
-                                    if (!OverrideConstantForce)
+                                    if (!DisablePhysicsApplication)
                                     {
-                                        SAVControl.SetProgramVariable("OverrideConstantForce", (int)SAVControl.GetProgramVariable("OverrideConstantForce") + 1);
-                                        SAVControl.SetProgramVariable("CFRelativeForceOverride", Vector3.zero);
-                                        SAVControl.SetProgramVariable("CFRelativeTorqueOverride", Vector3.zero);
-                                        OverrideConstantForce = true;
+                                        SAVControl.SetProgramVariable("DisablePhysicsApplication", (int)SAVControl.GetProgramVariable("DisablePhysicsApplication") + 1);
+                                        DisablePhysicsApplication = true;
                                     }
                                     //use dead to make plane invincible for x frames when entering the catapult to prevent taking G damage from stopping instantly
                                     EntityControl.dead = true;
-                                    CatapultDeadTimer = 5;
+                                    SendCustomEventDelayedSeconds(nameof(deadfalse), (float)SAVControl.GetProgramVariable("GsAveragingTime") * 2f);
 
                                     SendCustomNetworkEvent(VRC.Udon.Common.Interfaces.NetworkEventTarget.All, nameof(CatapultLockIn));
                                 }
@@ -208,7 +260,10 @@ namespace SaccFlightAndVehicles
             {
                 if (other)
                 {
-                    FindCatapultAnimator(other.gameObject);
+                    if (FindCatapultAnimator(other.gameObject))
+                    {
+                        FindAnimator_Disable();
+                    }
                 }
             }
         }
@@ -216,31 +271,60 @@ namespace SaccFlightAndVehicles
         {
             if ((Piloting && OnCatapult) || Launching)
             {
-                if (!Launching && Selected)
+                if (AutoLaunch)
                 {
-                    float Trigger;
-                    if (UseLeftTrigger)
-                    { Trigger = Input.GetAxisRaw("Oculus_CrossPlatform_PrimaryIndexTrigger"); }
-                    else
-                    { Trigger = Input.GetAxisRaw("Oculus_CrossPlatform_SecondaryIndexTrigger"); }
-                    if (Trigger > 0.75)
+                    if (AutoLaunch_FullThrottle)
                     {
-                        if (!TriggerLastFrame)
+                        if (!Launching)
+                        {
+                            if (SAVControl && (float)SAVControl.GetProgramVariable("ThrottleInput") == 1f)
+                            {
+                                if (!Launching_AB)
+                                {
+                                    Launching_AB = true;
+                                    FullThrottleTime = Time.time;
+                                }
+                            }
+                            else { Launching_AB = false; }
+                            if (Launching_AB && Time.time - FullThrottleTime > AutoLaunchDelay)
+                            {
+                                CatapultLaunchNow();
+                            }
+                        }
+                    }
+                    else if (!Launching)
+                    {
+                        if (Time.time - AttachTime > AutoLaunchDelay)
                         {
                             CatapultLaunchNow();
                         }
-                        TriggerLastFrame = true;
                     }
-                    else { TriggerLastFrame = false; }
                 }
-                if (EntityControl._dead)
+                else
                 {
-                    CatapultDeadTimer -= 1;
-                    if (CatapultDeadTimer == 0) { EntityControl.dead = false; }
+                    if (!Launching && Selected)
+                    {
+                        float Trigger;
+                        if (LeftDial)
+                        { Trigger = Input.GetAxisRaw("Oculus_CrossPlatform_PrimaryIndexTrigger"); }
+                        else
+                        { Trigger = Input.GetAxisRaw("Oculus_CrossPlatform_SecondaryIndexTrigger"); }
+                        if (Trigger > 0.75)
+                        {
+                            if (!TriggerLastFrame)
+                            {
+                                CatapultLaunchNow();
+                            }
+                            TriggerLastFrame = true;
+                        }
+                        else { TriggerLastFrame = false; }
+                    }
                 }
 
                 VehicleTransform.rotation = PlaneCatapultRotDif * CatapultTransform.rotation;
                 VehicleTransform.position = CatapultTransform.position + PlaneCatapultOffset;
+                VehicleRigidbody.position = VehicleTransform.position;
+                VehicleRigidbody.rotation = VehicleTransform.rotation;
                 VehicleRigidbody.velocity = Vector3.zero;
                 VehicleRigidbody.angularVelocity = Vector3.zero;
                 Quaternion CatapultRotDif = CatapultTransform.rotation * Quaternion.Inverse(CatapultRotLastFrame);
@@ -252,7 +336,25 @@ namespace SaccFlightAndVehicles
                     DisableOverrides();
                     SendCustomNetworkEvent(VRC.Udon.Common.Interfaces.NetworkEventTarget.All, nameof(CatapultLockOff));
                     SAVControl.SetProgramVariable("Taxiinglerper", 0f);
-                    VehicleRigidbody.velocity = (CatapultTransform.position - CatapultPosLastFrame) / DeltaTime;
+                    // allow world creators to set an exact launch speed in case they want to make a fair race or something
+                    Vector3 launchVel = (CatapultTransform.position - CatapultPosLastFrame) / DeltaTime;
+                    if (CatapultAnimator)
+                    {
+                        string catName = CatapultAnimator.gameObject.name;
+                        if (catName.Contains("speed="))
+                        {
+                            string[] splitCat = catName.Split("=");
+                            if (splitCat.Length > 1)
+                            {
+                                float launchSpeed;
+                                if (float.TryParse(splitCat[1], out launchSpeed))
+                                {
+                                    launchVel = launchVel.normalized * launchSpeed;
+                                }
+                            }
+                        }
+                    }
+                    VehicleRigidbody.velocity = launchVel;
                     Vector3 CatapultRotDifEULER = CatapultRotDif.eulerAngles;
                     //.eulerangles is dumb (convert 0 - 360 to -180 - 180)
                     if (CatapultRotDifEULER.x > 180) { CatapultRotDifEULER.x -= 360; }
@@ -261,7 +363,7 @@ namespace SaccFlightAndVehicles
                     Vector3 CatapultRotDifrad = (CatapultRotDifEULER * Mathf.Deg2Rad) / DeltaTime;
                     VehicleRigidbody.angularVelocity = CatapultRotDifrad;
                     EntityControl.dead = true;
-                    SendCustomEventDelayedFrames(nameof(deadfalse), 5);
+                    SendCustomEventDelayedSeconds(nameof(deadfalse), (float)SAVControl.GetProgramVariable("GsAveragingTime") * 2f);
                 }
                 CatapultRotLastFrame = CatapultTransform.rotation;
                 CatapultPosLastFrame = CatapultTransform.position;
@@ -279,10 +381,10 @@ namespace SaccFlightAndVehicles
                 SAVControl.SetProgramVariable("DisableTaxiRotation", (int)SAVControl.GetProgramVariable("DisableTaxiRotation") - 1);
                 DisableTaxiRotation = false;
             }
-            if (OverrideConstantForce)
+            if (DisablePhysicsApplication)
             {
-                SAVControl.SetProgramVariable("OverrideConstantForce", (int)SAVControl.GetProgramVariable("OverrideConstantForce") - 1);
-                OverrideConstantForce = false;
+                SAVControl.SetProgramVariable("DisablePhysicsApplication", (int)SAVControl.GetProgramVariable("DisablePhysicsApplication") - 1);
+                DisablePhysicsApplication = false;
             }
         }
         public void deadfalse()
@@ -302,26 +404,26 @@ namespace SaccFlightAndVehicles
             if (IsOwner && OnCatapult && !Launching)
             {
                 Launching = true;
-                SendCustomNetworkEvent(VRC.Udon.Common.Interfaces.NetworkEventTarget.All, nameof(PreLaunchCatapult));
+                SendCustomNetworkEvent(VRC.Udon.Common.Interfaces.NetworkEventTarget.All, nameof(LaunchCatapult));
                 EntityControl.SendEventToExtensions("SFEXT_O_LaunchFromCatapult");
             }
         }
-        public void PreLaunchCatapult()
-        {
-            if (!IsOwner) { EnableOneFrameToFindAnimator(); }
-            SendCustomEventDelayedFrames(nameof(LaunchCatapult), 3);
-            if (VehicleAnimator) { VehicleAnimator.SetTrigger(AnimTriggerLaunchName); }
-        }
         public void LaunchCatapult()
         {
+            if (VehicleAnimator) { VehicleAnimator.SetTrigger(AnimTriggerLaunchName); }
             if (Utilities.IsValid(CatapultAnimator))
             { CatapultAnimator.SetTrigger("launch"); }
+            CatapultAnimator = null;
             if (Dial_Funcon) { Dial_Funcon.SetActive(false); }
             EntityControl.SendEventToExtensions("SFEXT_G_LaunchFromCatapult");
         }
         public void CatapultLockIn()
         {
-            OnCatapult = true;
+            if (!IsOwner)
+            {
+                EnableToFindAnimator();
+                OnCatapult = true;
+            }
             if (VehicleAnimator) { VehicleAnimator.SetBool("oncatapult", true); }
             if (CatapultLock) { CatapultLock.Play(); }
             if (Dial_Funcon) { Dial_Funcon.SetActive(true); }

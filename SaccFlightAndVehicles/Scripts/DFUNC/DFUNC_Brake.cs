@@ -18,7 +18,6 @@ namespace SaccFlightAndVehicles
         public Transform GroundBrakeForcePosition;
         [Tooltip("Because you have to hold the break, and the keyboardcontrols script can only send events, this option is here.")]
         public KeyCode KeyboardControl = KeyCode.B;
-        private bool UseLeftTrigger = false;
         [System.NonSerializedAttribute, UdonSynced(UdonSyncMode.None)] public float BrakeInput;
         private Rigidbody VehicleRigidbody;
         private bool HasAirBrake;
@@ -41,7 +40,10 @@ namespace SaccFlightAndVehicles
             }
             get => DisableGroundBrake;
         }
-        private SaccEntity EntityControl;
+        [System.NonSerializedAttribute] public bool LeftDial = false;
+        [System.NonSerializedAttribute] public int DialPosition = -999;
+        [System.NonSerializedAttribute] public SaccEntity EntityControl;
+        [System.NonSerializedAttribute] public SAV_PassengerFunctionsController PassengerFunctionsControl;
         private float BrakeStrength;
         private int BRAKE_STRING = Animator.StringToHash("brake");
         private bool Braking;
@@ -55,17 +57,14 @@ namespace SaccFlightAndVehicles
         private bool InVehicle;
         private float NextUpdateTime;
         private float RotMultiMaxSpeedDivider;
-        public void DFUNC_LeftDial() { UseLeftTrigger = true; }
-        public void DFUNC_RightDial() { UseLeftTrigger = false; }
         public void SFEXT_L_EntityStart()
         {
-            EntityControl = (SaccEntity)SAVControl.GetProgramVariable("EntityControl");
             VehicleRigidbody = EntityControl.GetComponent<Rigidbody>();
             HasAirBrake = AirbrakeStrength != 0;
             RotMultiMaxSpeedDivider = 1 / (float)SAVControl.GetProgramVariable("RotMultiMaxSpeed");
-            IsOwner = (bool)SAVControl.GetProgramVariable("IsOwner");
+            IsOwner = EntityControl.IsOwner;
             VRCPlayerApi localPlayer = Networking.LocalPlayer;
-            if (localPlayer != null && !localPlayer.isMaster)
+            if (localPlayer != null && !EntityControl.IsOwner)
             { gameObject.SetActive(false); }
             else
             { gameObject.SetActive(true); }
@@ -186,7 +185,7 @@ namespace SaccFlightAndVehicles
                         if (Selected)
                         {
                             float Trigger;
-                            if (UseLeftTrigger)
+                            if (LeftDial)
                             { Trigger = Input.GetAxisRaw("Oculus_CrossPlatform_PrimaryIndexTrigger"); }
                             else
                             { Trigger = Input.GetAxisRaw("Oculus_CrossPlatform_SecondaryIndexTrigger"); }
@@ -309,8 +308,8 @@ namespace SaccFlightAndVehicles
                     return;
                 }
             }
-            AirbrakeLerper = Mathf.Lerp(AirbrakeLerper, BrakeInput, 2f * DeltaTime);
-            BrakeAnimator.SetFloat(BRAKE_STRING, AirbrakeLerper);
+            AirbrakeLerper = Mathf.Lerp(AirbrakeLerper, BrakeInput, 1 - Mathf.Pow(0.5f, 2f * DeltaTime));
+            if (BrakeAnimator) { BrakeAnimator.SetFloat(BRAKE_STRING, AirbrakeLerper); }
             if (InVehicle && Airbrake_snd)
             {
                 Airbrake_snd.pitch = AirbrakeLerper * .2f + .9f;

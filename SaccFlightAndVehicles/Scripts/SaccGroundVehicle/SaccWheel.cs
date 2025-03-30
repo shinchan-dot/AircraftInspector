@@ -7,42 +7,60 @@ using VRC.Udon;
 namespace SaccFlightAndVehicles
 {
     [DefaultExecutionOrder(1500)]
-    [UdonBehaviourSyncMode(BehaviourSyncMode.Continuous)]
+    // [UdonBehaviourSyncMode(BehaviourSyncMode.Manual)]
     public class SaccWheel : UdonSharpBehaviour
     {
+        [Header("Sync is only used for skid effects,\nset Synchronization Method:\nNone to save bandwidth (Use for tanks)\nManual to sync skid sounds/effects\nDo Not Use Continuous")]
+        [Space(10)]
         public Rigidbody CarRigid;
         public SaccGroundVehicle SGVControl;
+        public float SyncInterval = 0.3f;
         public Transform WheelPoint;
         public Transform WheelVisual;
+        public Transform WheelVisual_Ground;
+        [Tooltip("For if wheel is part of a caterpillar track, so wheels can match rotation with each other, prevent (visual) wheelspinning")]
+        public SaccWheel WheelVisual_RotationSource;
         public float SuspensionDistance;
         public float WheelRadius;
-        public float SpringForceMulti = .25f;
-        public float DampingForceMulti = 0.01111111f;
-        public float DampingForce_BottomOutMulti = 5f;
-        [Tooltip("Limit suspension force so that the car doesn't fly up when going up large step instantly")]
-        public float MaxSuspensionForce = .2f;
-        //[Tooltip("Limit Damping force so that the car doesn't behave strangely when leaving a ramp")]
-        private float MaxNegativeDamping = 0f;
+        public float SpringForceMulti = 8f;
+        [Tooltip("Multiplier for suspension strength when suspension is compressing")]
+        public float Damping_Bump = 0.75f;
+        [Tooltip("Multiplier for suspension strength(reduction) when suspension is decompressing")]
+        public float Damping_Rebound = 0.7f;
+        [Tooltip("Limit suspension force so that the car doesn't jump up when going over a step")]
+        public float MaxSusForce = 60f;
+        // [Tooltip("Limit Damping when suspension is decomopressing?")]
+        // public float MaxNegDamping = 999999f;
         [Tooltip("Extra height on the raycast origin to prevent the wheel from sticking through the floor")]
         public float ExtraRayCastDistance = .5f;
-        public float Grip = 7f;
+        public float Grip = 350f;
         public AnimationCurve GripCurve = AnimationCurve.Linear(0, 1, 1, 1);
-        public bool SeparateLongLatGrip = false;
         [Tooltip("Multiply forward grip by this value for sideways grip")]
-        public float LateralGrip = .8f;
+        public float LateralGrip = 1f;
         public AnimationCurve GripCurveLateral = AnimationCurve.Linear(0, 1, 1, 1);
-        [Tooltip("Torque, kindof. How quickly the wheel matches the speed of the ground when in contact with it")]
-        public float WheelWeight = 0.1f;
-        public float BrakeStrength = 500f;
-        public float HandBrakeStrength = 70f;
+        [Tooltip("!!THE LATERAL GRIP VARS ARE STILL USED WHEN THIS IS FALSE, JUST DIFFERENTLY!!\nCompletely separate wheel's sideways and forward grip calculations (More arcadey)")]
+        public bool SeparateLongLatGrip = false;
+        [Tooltip("Choose how much separation there is\n0 is still different from SeparateLongLatGrip being disabled\nRECOMMENDED: SkidRatioMode 1")]
+        public float LongLatSeparation = 1;
+        [Tooltip("How quickly grip falls off with roll")]
+        public float WheelRollGrip_Power = 1;
+        [Range(0, 2), Tooltip("3 Different ways to calculate amount of engine force used when sliding + accelerating, for testing. 0 = old way, 1 = keeps more energy, 2 = loses more energy")]
+        public int SkidRatioMode = 0;
+        [Tooltip("Only effects DriveWheels. Behaves like engine torque. How much forces on the wheel from the ground can influence the engine speed, low values will make the car skid more")]
+        public float EngineInfluence = 80000f;
+        [Tooltip("Max angle of ground at which vehicle can park on without sliding down")]
+        [SerializeField] float MaxParkingIncline = 30;
         public LayerMask WheelLayers;
+        public float ClutchStrength = 100f;
+        [Tooltip("Skip sound and skid effects completely")]
+        public bool DisableEffects = false;
         public float[] SurfaceType_Grips = { 1f, 0.7f, 0.2f, 1f, 1f, 1f, 1f, 1f, 1f, 1f };
         public float[] SurfaceType_Slowdown = { 0.1f, 4f, 0.05f, 0.1f, 0.1f, 0.1f, 0.1f, 0.1f, 0.1f, 0.1f };
         public AudioSource[] SurfaceType_SkidSounds;
         public ParticleSystem[] SurfaceType_SkidParticles;
         public ParticleSystem.EmissionModule[] SurfaceType_SkidParticlesEM;
-        public float[] SurfaceType_SkidParticles_NumParticles = { 2, 2, 2, 2, 2, 2, 2, 2, 2, 2 };
-        public float ClutchStrength = .33f;
+        public float[] SurfaceType_SkidParticles_Amount = { .3f, .3f, .3f, .3f, .3f, .3f, .3f, .3f, .3f, .3f };
+        private float SkidSound_Min_THREEQUARTER, SkidSound_Min_TWOTHRID; // sync a bit before the skid speed so it's more accurate
         [Tooltip("Lower number = less skid required for sound to start")]
         public float SkidSound_Min = 3f;
         [Tooltip("How quickly volume increases as skid speed increases")]
@@ -52,31 +70,32 @@ namespace SaccFlightAndVehicles
         public float SkidSound_Pitch = 1f;
         [Tooltip("Reduce volume of skid swhilst in the car")]
         public float SkidVolInVehicleMulti = .4f;
-        [Tooltip("Skip sound and skid effects completely")]
-        public bool DisableEffects = false;
-        [Range(0, 2), Tooltip("3 Different ways to calculate amount of engine force used when sliding + accelerating, for testing. 0 = old way, 1 = keeps more energy, 2 = loses more energy")]
-        public int SkidRatioMode = 0;
-        [Header("Drive Wheels Only")]
-        [Tooltip("How much the wheel slowing down/speeding up changes the engine speed")]
-        public float EngineInfluence = 225f;
-        [Tooltip("Number of steps per second wheel physics should run, minimum, if refresh rate is higher than this number, it will do nothing. Improves vehicle acceleration fairness.")]
-        public int NumStepsSec = 200;
         [Header("Debug")]
+        public Transform LastTouchedTransform;
+        public Rigidbody LastTouchedTransform_RB;
+        public Vector3 LastTouchedTransform_Position;
+        public Vector3 LastTouchedTransform_Speed;
         public float CurrentGrip = 7f;
         public float CurrentNumParticles = 0f;
         public float CurrentWheelSlowDown = 0f;
-        private bool IsDriveWheel = false;
+        [System.NonSerialized] public bool IsDriveWheel = false;
+        [System.NonSerialized] public bool IsSteerWheel = false;
+        [System.NonSerialized] public bool IsOtherWheel = false;
         private AudioSource SkidSound;
         private ParticleSystem SkidParticle;
         private ParticleSystem.EmissionModule SkidParticleEM;
-        private Vector3 SkidVectorFX;
         [UdonSynced(UdonSyncMode.Linear)] private float SkidLength;
+        private float SkidLength_Smoothed;
+        public float SkidLength_SmoothStep = 0.11f;
+        private bool SyncSkid_Running;
+        private bool SkidLength_SkiddingLast;
+        private float lastSync;
         public float Clutch = 1f;
+        public float BrakeStrength;
         public float WheelRotation;
         public float WheelRotationSpeedRPS;
         public float WheelRotationSpeedRPM;
         public float WheelRotationSpeedSurf;
-        public float EngineRevs = 0;
         public bool Grounded;
         [System.NonSerialized] public float HandBrake;
         [System.NonSerialized] public float Brake;
@@ -85,6 +104,7 @@ namespace SaccFlightAndVehicles
         private float SkidVolumeMulti = 1;
         private bool SkidSoundPlayingLast;
         private bool SkidParticlePlayingLast;
+        bool TankMode;
         private Vector3 SusDirection;
         private Renderer WheelRenderer;
         [FieldChangeCallback(nameof(GearRatio))] public float _GearRatio = 0f;
@@ -92,7 +112,7 @@ namespace SaccFlightAndVehicles
         {
             set
             {
-                if (value == 0f)
+                if (value == 0f && !TankMode)
                 {
                     GearNeutral = true;
                 }
@@ -109,11 +129,10 @@ namespace SaccFlightAndVehicles
         private float WheelCircumference;
         private float compressionLast;
         public bool IsOwner = false;
-        public bool Piloting = false;
-        public bool Debugslip = false;
         public bool CurrentlyDistant = true;
 
 #if UNITY_EDITOR
+        bool running;
         public bool SetVel;
         public bool PrintDebugValues;
         public Vector3 DebugMoveSpeed = Vector3.zero;
@@ -134,12 +153,12 @@ namespace SaccFlightAndVehicles
         }
         public void DEBUGAccelCar()
         {
+            SGVControl.SendCustomEvent("setStepsSec");
             CarRigid.velocity = Vector3.zero;
             CarRigid.angularVelocity = Vector3.zero;
             SendCustomEventDelayedSeconds(nameof(DEBUGAccelCar_2), Time.fixedDeltaTime * 2);
             SGVControl.SetProgramVariable("Revs", 0f);
             accelstartpoint = CarRigid.position;
-            EngineRevs = 0;
             WheelRotationSpeedRPM = 0;
             WheelRotationSpeedRPS = 0;
             WheelRotationSpeedSurf = 0;
@@ -152,7 +171,6 @@ namespace SaccFlightAndVehicles
             SGVControl.SetProgramVariable("ACCELTEST", true);
             SGVControl.SetProgramVariable("Revs", 0f);
             accelstartpoint = CarRigid.position;
-            EngineRevs = 0;
             WheelRotationSpeedRPM = 0;
             WheelRotationSpeedRPS = 0;
             WheelRotationSpeedSurf = 0;
@@ -168,7 +186,6 @@ namespace SaccFlightAndVehicles
             SendCustomEventDelayedSeconds(nameof(DEBUGAccelCar_Revup_2), Time.fixedDeltaTime * 2);
             SGVControl.SetProgramVariable("Revs", 0f);
             accelstartpoint = CarRigid.position;
-            EngineRevs = 0;
             WheelRotationSpeedRPM = 0;
             WheelRotationSpeedRPS = 0;
             WheelRotationSpeedSurf = 0;
@@ -180,7 +197,6 @@ namespace SaccFlightAndVehicles
             SGVControl.SetProgramVariable("ACCELTEST", true);
             SGVControl.SetProgramVariable("Revs", 0f);
             accelstartpoint = CarRigid.position;
-            EngineRevs = 0;
             WheelRotationSpeedRPM = 0;
             WheelRotationSpeedRPS = 0;
             WheelRotationSpeedSurf = 0;
@@ -196,6 +212,9 @@ namespace SaccFlightAndVehicles
 #endif
         void Start()
         {
+            TankMode = (bool)SGVControl.GetProgramVariable("TankMode");
+            SkidSound_Min_THREEQUARTER = SkidSound_Min * .75f;
+            SkidSound_Min_TWOTHRID = SkidSound_Min * .66f;
             WheelRenderer = (Renderer)SGVControl.GetProgramVariable("MainObjectRenderer");
             if (!WheelRenderer)
             {
@@ -225,14 +244,18 @@ namespace SaccFlightAndVehicles
                     SkidParticleEM = SurfaceType_SkidParticlesEM[0];
                 }
             }
-            DoSurface = Random.Range(0, 6);
+            DoSurface = Random.Range(0, 4);
+            DisableEffects = SurfaceType_SkidSounds.Length == 0 && SurfaceType_SkidParticles.Length == 0;
+#if UNITY_EDITOR
+            running = true;
+#endif
         }
         public void ChangeSurface()
         {
             if (SurfaceType < 0) { return; }
             CurrentGrip = Grip * SurfaceType_Grips[SurfaceType];
-            CurrentWheelSlowDown = SurfaceType_Slowdown[SurfaceType];
-            CurrentNumParticles = SurfaceType_SkidParticles_NumParticles[SurfaceType];
+            CurrentWheelSlowDown = SurfaceType_Slowdown[SurfaceType] * .01f;//*.01 to offset removed *deltatime 
+            CurrentNumParticles = SurfaceType_SkidParticles_Amount[SurfaceType];
             StopSkidSound();
             if (SurfaceType < SurfaceType_SkidSounds.Length)
             {
@@ -260,53 +283,120 @@ namespace SaccFlightAndVehicles
                 SkidParticle = null;
             }
         }
-        float Steps_Error;
-        public void FixedUpdate()
+        public void Wheel_FixedUpdate()
         {
-            if (!IsOwner || Sleeping) { return; }
-            if (Piloting && IsDriveWheel)//only do subframe Stepsations if driving
+            if (Sleeping) { return; }
+            Suspension();
+            WheelPhysics();
+        }
+        float gripLast;
+        private void Suspension()
+        {
+            float compression = 0f;
+            if (Physics.Raycast(WheelPoint.position + WheelPoint.up * ExtraRayCastDistance, -WheelPoint.up, out SusOut, SuspensionDistance + ExtraRayCastDistance, WheelLayers, QueryTriggerInteraction.Ignore))
             {
-                float StepsFloat = ((Time.fixedDeltaTime) * NumStepsSec);
-                int steps = (int)((Time.fixedDeltaTime) * NumStepsSec);
-                Steps_Error += StepsFloat - steps;
-                if (Steps_Error > 1)
+                float fixedDT = Time.fixedDeltaTime;
+                Vector3 PointVel = (SusOut.point - GroundPointLast) / fixedDT;
+                GroundPointLast = SusOut.point;
+                GetTouchingTransformSpeed();
+                if (Grounded)
                 {
-                    int AddSteps = (int)Mathf.Floor(Steps_Error);//pretty sure this can never be anything but 1 unless refresh rate is changed during play maybe
-                    steps += AddSteps;
-                    Steps_Error = (Steps_Error - AddSteps);
+                    PointVelocity = PointVel - LastTouchedTransform_Speed;
                 }
-                if (steps < 1) { steps = 1; }//if refresh rate is above NumItsSec just run once per frame, nothing else we can do
-                for (int i = 0; i < steps; i++)
-                { WheelPhysics(steps, i); }
+                else
+                {
+                    PointVelocity = CarRigid.GetPointVelocity(SusOut.point) - LastTouchedTransform_Speed;
+                }
+                Grounded = true;
+                //SusDirection is closer to straight up the slower vehicle is moving, so that it can stop on slopes
+                if (Vector3.Angle(SusOut.normal, Vector3.up) < MaxParkingIncline && !SGVControl.Bike_AutoSteer)
+                { SusDirection = Vector3.Lerp(Vector3.up, SusOut.normal, (SGVControl.VehicleSpeed / 1f)); }
+                else
+                { SusDirection = SusOut.normal; }
+
+#if UNITY_EDITOR
+                // make changing 'grip' value work instantly in editor play mode
+                if (gripLast != Grip)
+                {
+                    SurfaceType = -1;
+                    gripLast = Grip;
+                }
+#endif
+                CheckSurface();
+                //SUSPENSION//
+                compression = 1f - ((SusOut.distance - ExtraRayCastDistance) / SuspensionDistance);
+                //Spring force: More compressed = more force
+                Vector3 SpringForce = SusDirection * compression * SpringForceMulti * fixedDT;
+                float damping = compression - compressionLast;
+                damping *= damping > 0 ? Damping_Bump : Damping_Rebound;
+                compressionLast = compression;
+                //Damping force: The more the difference in compression between updates, the more force
+                Vector3 DampingForce = SusDirection * damping/*  * Vector3.Dot(SusOut.normal, WheelPoint.up) */;
+                //these are added together, but both contain deltatime, potential deltatime problem source?
+                SusForce = SpringForce + DampingForce;//The total weight on this suspension
+
+                if (SusForce.magnitude / fixedDT > MaxSusForce)
+                {
+                    SusForce = SusForce.normalized * MaxSusForce * fixedDT;
+                }
+
+                float susdot = Vector3.Dot(WheelPoint.up, SusForce);
+                if (susdot > 0)// don't let the suspension force push the car down
+                { CarRigid.AddForceAtPosition(SusForce, WheelPoint.position, ForceMode.VelocityChange); }
+
+                //set wheel's visual position
+                if (SusOut.distance > ExtraRayCastDistance)
+                {
+                    WheelVisual.position = SusOut.point + (WheelPoint.up * WheelRadius);
+                    if (WheelVisual_Ground) { WheelVisual_Ground.position = SusOut.point; }
+                }
+                else
+                {
+                    WheelVisual.position = WheelPoint.position + (WheelPoint.up * WheelRadius);
+                    if (WheelVisual_Ground) { WheelVisual_Ground.position = WheelPoint.position; }
+                }
+                //END OF SUSPENSION//
+                //GRIP//
+                //Wheel's velocity vector projected to the normal of the ground
+                WheelGroundUp = Vector3.ProjectOnPlane(SusOut.normal, WheelPoint.right).normalized;
+#if UNITY_EDITOR
+                ContactPoint = SusOut.point;
+#endif
             }
-            else { WheelPhysics(1, 0); }
+            else
+            {
+                //wheel not touching ground
+                if (SkidSoundPlayingLast) { StopSkidSound(); }
+                if (SkidParticlePlayingLast) { StopSkidParticle(); }
+                WheelVisual.position = WheelPoint.position - (WheelPoint.up * (SuspensionDistance - WheelRadius));
+                if (WheelVisual_Ground) { WheelVisual_Ground.position = WheelPoint.position - (WheelPoint.up * (SuspensionDistance)); }
+                SusForce = Vector3.zero;
+                Grounded = false;
+                compressionLast = 0f;
+            }
         }
         RaycastHit SusOut;
         Vector3 SusForce;
         Vector3 WheelGroundUp = Vector3.up;
+        Vector3 GroundPointLast;
         Vector3 PointVelocity;
-        private void WheelPhysics(int NumSteps, int CurSteps)
+        private void WheelPhysics()
         {
-            float WheelPhysicsDelta = Time.fixedDeltaTime / NumSteps;
-            float compression = 0f;
+            float DeltaTime = Time.fixedDeltaTime;
             float ForwardSpeed = 0f;
             float ForwardSideRatio = 0f;
             float ForceUsed = 0f;
             float ForwardSlip = 0f;
-
+            Vector3 SkidVectorFX = Vector3.zero;
+            bool slowing = false;
 
             if (IsDriveWheel && !GearNeutral)
             {
-                //somehow, not using deltatime here, and then also not using it at the part that updates SGVControl.Revs near the end of the fucntion works better than have it in both places.
-                WheelRotationSpeedRPM = Mathf.Lerp(WheelRotationSpeedRPM, EngineRevs * _GearRatio, (1f - Clutch) * ClutchStrength /* * Time.fixedDeltaTime * 90f */);
+                float EngineRevs = (float)SGVControl.GetProgramVariable("Revs");
+                WheelRotationSpeedRPM = Mathf.Lerp(WheelRotationSpeedRPM, EngineRevs * _GearRatio, 1 - Mathf.Pow(0.5f, (1f - Clutch) * ClutchStrength));
                 WheelRotationSpeedRPS = WheelRotationSpeedRPM / 60f;
                 WheelRotationSpeedSurf = WheelCircumference * WheelRotationSpeedRPS;
             }
-            float WheelRotationSpeedSurfPrev = WheelRotationSpeedSurf;
-            WheelRotationSpeedSurf = Mathf.MoveTowards(WheelRotationSpeedSurf, 0f, WheelPhysicsDelta * Brake * BrakeStrength);
-            WheelRotationSpeedSurf = Mathf.MoveTowards(WheelRotationSpeedSurf, 0f, WheelPhysicsDelta * HandBrake * HandBrakeStrength);
-            WheelRotationSpeedRPS = WheelRotationSpeedSurf / WheelCircumference;
-            WheelRotationSpeedRPM = WheelRotationSpeedRPS * 60f;
 
 #if UNITY_EDITOR
             DistResultPush = Vector3.Distance(pushstartpoint, CarRigid.position);
@@ -328,102 +418,16 @@ namespace SaccFlightAndVehicles
                 }
             }
 #endif
-            if (CurSteps == 0)//stuff doesn't need to be substepped
-            {
-                if (Physics.Raycast(WheelPoint.position + WheelPoint.up * ExtraRayCastDistance, -WheelPoint.up, out SusOut, SuspensionDistance + ExtraRayCastDistance, WheelLayers, QueryTriggerInteraction.Ignore))
-                {
-                    float fixedDT = Time.fixedDeltaTime;
-                    Grounded = true;
-                    //SusDirection is closer to straight up the slower vehicle is moving, so that it can stop
-                    if (Vector3.Angle(SusOut.normal, Vector3.up) < 20)
-                    { SusDirection = Vector3.Lerp(Vector3.up, SusOut.normal, (SGVControl.VehicleSpeed / 1f)); }
-                    else
-                    { SusDirection = SusOut.normal; }
-
-                    //last character of surface object is its type
-                    int SurfLastChar = SusOut.collider.gameObject.name[SusOut.collider.gameObject.name.Length - 1];
-                    if (SurfLastChar >= '0' && SurfLastChar <= '9')
-                    {
-                        if (SurfaceType != SurfLastChar - '0')
-                        {
-                            SurfaceType = SurfLastChar - '0';
-                            ChangeSurface();
-                        }
-                    }
-                    else
-                    {
-                        if (SurfaceType != 0)
-                        {
-                            SurfaceType = 0;
-                            ChangeSurface();
-                        }
-                    }
-                    //SUSPENSION//
-                    compression = 1f - ((SusOut.distance - ExtraRayCastDistance) / SuspensionDistance);
-                    //Spring force: More compressed = more force
-                    Vector3 SpringForce = (SusDirection/* WheelPoint.up */ * compression * SpringForceMulti) * fixedDT;
-                    float damping = (compression - compressionLast);
-                    compressionLast = compression;
-                    if (compression > 1f)//bottomed out
-                    {
-                        damping *= DampingForce_BottomOutMulti;
-                    }
-                    if (damping < -MaxNegativeDamping)
-                    {
-                        damping = -MaxNegativeDamping;
-                    }
-                    //Damping force: The more the difference in compression between updates, the more force
-                    Vector3 DampingForce = SusDirection/* WheelPoint.up */ * (damping * DampingForceMulti);
-                    SusForce = SpringForce + DampingForce;//The total weight on this suspension
-                                                          //limit sus force
-                    if (SusForce.magnitude / fixedDT > MaxSuspensionForce)
-                    {
-                        SusForce *= MaxSuspensionForce * fixedDT / (SusForce).magnitude;
-                    }
-
-                    CarRigid.AddForceAtPosition(SusForce, WheelPoint.position, ForceMode.VelocityChange);
-
-                    //set wheel's visual position
-                    if (SusOut.distance > ExtraRayCastDistance)
-                    {
-                        WheelVisual.position = SusOut.point + (WheelPoint.up * WheelRadius);
-                    }
-                    else
-                    {
-                        WheelVisual.position = WheelPoint.position + (WheelPoint.up * WheelRadius);
-                    }
-                    //END OF SUSPENSION//
-                    //GRIP//
-                    //Wheel's velocity vector projected to the normal of the ground
-                    WheelGroundUp = Vector3.ProjectOnPlane(SusOut.normal, WheelPoint.right).normalized;
-                    PointVelocity = CarRigid.GetPointVelocity(SusOut.point);
-#if UNITY_EDITOR
-                    ContactPoint = SusOut.point;
-#endif
-                }
-                else
-                {
-                    //wheel not touching ground
-                    if (SkidSoundPlayingLast) { StopSkidSound(); }
-                    if (SkidParticlePlayingLast) { StopSkidParticle(); }
-                    WheelVisual.position = WheelPoint.position - (WheelPoint.up * (SuspensionDistance - WheelRadius));
-                    SusForce = Vector3.zero;
-                    Grounded = false;
-                    compressionLast = 0f;
-                }
-            }
             if (Grounded)
             {
-                //GRIP//
                 //Wheel's velocity vector projected to be only forward/back
                 Vector3 WheelForwardSpeed = Vector3.ProjectOnPlane(PointVelocity, WheelPoint.right);
                 WheelForwardSpeed -= Vector3.Project(WheelForwardSpeed, WheelGroundUp);
                 float ForwardSpeed_abs = WheelForwardSpeed.magnitude;
                 ForwardSpeed = ForwardSpeed_abs;
                 if (Vector3.Dot(WheelForwardSpeed, WheelPoint.forward) < 0f)
-                {
-                    ForwardSpeed = -ForwardSpeed;
-                }
+                { ForwardSpeed = -ForwardSpeed; }
+
                 ForwardSlip = ForwardSpeed - WheelRotationSpeedSurf;
                 //How much the wheel is slipping (difference between speed of wheel rotation at it's surface, and the speed of the ground beneath it), as a vector3
                 Vector3 ForwardSkid = Vector3.ProjectOnPlane(WheelPoint.forward, SusOut.normal).normalized * ForwardSlip;
@@ -434,14 +438,11 @@ namespace SaccFlightAndVehicles
                 //add both skid axis together to get total 'skid'
                 Vector3 FullSkid = SideSkid + ForwardSkid;
                 float FullSkidMag = FullSkid.magnitude;
-
                 //find out how much of the skid is on the forward axis 
                 if (FullSkidMag != 0)
                 {
                     if (SkidRatioMode == 0)
-                    {
                         ForwardSideRatio = Vector3.Dot(ForwardSkid / FullSkidMag, FullSkid / FullSkidMag);
-                    }
                     else
                     {
                         //these might produce different/more arcadey feel idk
@@ -449,140 +450,130 @@ namespace SaccFlightAndVehicles
                         float SideLen = SideSkid.magnitude;
                         float fullLen = ForwardLen + SideLen;
                         if (SkidRatioMode == 1)
-                        {
                             ForwardSideRatio = ForwardLen / fullLen;
-                        }
                         else
-                        {
                             ForwardSideRatio = ForwardLen / FullSkidMag;
-                        }
                     }
                 }
-
-                //SkidVectorFX is just used for effects, it has to take the forward after the grip forces
-                //because we don't know how much of the forward skid will be gripped yet
-                SkidVectorFX = SideSkid;
-
                 Vector3 GripForce3;
                 //SusForce has deltatime built in
-                float SusForceMag = SusForce.magnitude / NumSteps;
-                Vector3 GripForceForward = -FullSkid.normalized * GripCurve.Evaluate((FullSkidMag) / (CurrentGrip * (SusForceMag / WheelPhysicsDelta / 90f))) * CurrentGrip * SusForceMag;
+                float SusForceMag = SusForce.magnitude;
+                float MaxGrip = (SusForceMag * CurrentGrip) / DeltaTime;
+                float MaxGripLat = MaxGrip * LateralGrip;
+                Vector3 GripForceForward;
+                Vector3 GripForcLat;
+                float WheelRollGrip = Mathf.Max(Mathf.Pow(Vector3.Dot(transform.up, SusOut.normal), WheelRollGrip_Power), .3f);
+
                 if (SeparateLongLatGrip)
                 {
-                    Vector3 GripForceSide = -FullSkid.normalized * GripCurveLateral.Evaluate((FullSkidMag) / (CurrentGrip * LateralGrip * (SusForceMag / WheelPhysicsDelta / 90f))) * CurrentGrip * LateralGrip * SusForceMag;
-                    GripForce3 = Vector3.Lerp(GripForceSide, GripForceForward, ForwardSideRatio);
+                    float evalskid = ForwardSkid.magnitude / MaxGrip;
+                    float gripPc = GripCurve.Evaluate(evalskid);
+                    GripForceForward = -ForwardSkid.normalized * gripPc * MaxGrip * WheelRollGrip;
+
+                    float evalskidLat = SideSkid.magnitude / MaxGripLat;
+                    float gripPcLat = GripCurveLateral.Evaluate(evalskidLat);
+                    GripForcLat = -SideSkid.normalized * gripPcLat * MaxGripLat * WheelRollGrip;
+                    GripForce3 = (GripForceForward + GripForcLat) * DeltaTime;
+                    Vector3 newgrip = Vector3.Slerp(GripForcLat, GripForceForward, ForwardSideRatio) * DeltaTime;
+                    GripForce3 = Vector3.Lerp(newgrip, GripForce3, LongLatSeparation);
+                    gripPc = Mathf.Lerp(gripPc * ForwardSideRatio, gripPc, LongLatSeparation);
+                    SkidVectorFX = SideSkid + ForwardSkid - ForwardSkid * gripPc;
                 }
                 else
-                { GripForce3 = GripForceForward; }
-                //Add the Grip forces to the rigidbody
-                //Why /90? Who knows! Maybe offsetting something to do with delta time, no idea why it's needed.
-                CarRigid.AddForceAtPosition(GripForce3 / 90f, SusOut.point, ForceMode.VelocityChange);
-                ForceUsed = (GripForce3.magnitude * ForwardSideRatio);
+                {
+                    float evalskid = FullSkid.magnitude / MaxGrip;
+                    float gripPc = GripCurve.Evaluate(evalskid);
+                    GripForceForward = -FullSkid.normalized * gripPc * MaxGrip * WheelRollGrip;
+
+                    float evalskidLat = FullSkid.magnitude / MaxGripLat;
+                    float gripPcLat = GripCurveLateral.Evaluate(evalskidLat);
+                    GripForcLat = -FullSkid.normalized * gripPcLat * MaxGripLat * WheelRollGrip;
+                    GripForce3 = Vector3.Lerp(GripForcLat, GripForceForward, ForwardSideRatio) * DeltaTime;
+                    SkidVectorFX = SideSkid + ForwardSkid - ForwardSkid * gripPc;
+                }
+                CarRigid.AddForceAtPosition(GripForce3, SusOut.point, ForceMode.VelocityChange);
+                ForceUsed = Vector3.Dot(WheelForwardSpeed.normalized, GripForce3);
 #if UNITY_EDITOR
                 ForceVector = GripForce3;
                 ForceUsedDBG = ForceUsed;
 #endif
-                //DEBUG
-                /*                 if (PrintDebugValues)
-                                {
-                                    Debug.Log(string.Concat("ForwardSlip: ", ForwardSlip.ToString()));
-                                    Debug.Log(string.Concat("FORWARDSKIDMAG: ", ForwardSkid.magnitude.ToString()));
-                                    Debug.Log(string.Concat("SIDESKIDMAG: ", SideSkid.magnitude.ToString()));
-                                    Debug.Log(string.Concat("FULLSKIDMAG: ", FullSkidMag.ToString()));
-                                    Debug.Log(string.Concat("GripForce3.magnitude / Time.fixedDeltaTime: ", (GripForce3.magnitude / Time.fixedDeltaTime).ToString()));
-                                    Debug.Log(string.Concat("GripForce: ", (ForceUsed / Time.fixedDeltaTime).ToString()));
-                                    Debug.Log(string.Concat("SusForce.magnitude / Time.fixedDeltaTime: ", (SusForce.magnitude / Time.fixedDeltaTime).ToString()));//no delta problems
-                                    Debug.Log(string.Concat("(FullSkidMag) / (Grip * (SusForce.magnitude / Time.fixedDeltaTime / 90f): ", (FullSkidMag / (_Grip * (SusForce.magnitude / Time.fixedDeltaTime / 90f))).ToString()));
-                                    Debug.Log(string.Concat("_CRUVEEVAL : ", GripCurve.Evaluate((FullSkidMag) / (_Grip * (SusForce.magnitude / Time.fixedDeltaTime _/ 90f))).ToString()));
-                                } */
-                //ENDOFDEBUG
+                if (IsDriveWheel && !TankMode)
+                    WheelRotationSpeedSurf = Mathf.Lerp(WheelRotationSpeedSurf, ForwardSpeed, Clutch);
+                else
+                    WheelRotationSpeedSurf = ForwardSpeed;
+                // I don't know why these changes to WheelRotationSpeedSurf don't need delta time multiplied in. Doing so makes lower dt = slower car & worse brakes
+                //wheels slow down due to ?friction
+                WheelRotationSpeedSurf = Mathf.Lerp(WheelRotationSpeedSurf, 0, 1 - Mathf.Pow(0.5f, CurrentWheelSlowDown));
             }
-
-            //move wheel rotation speed towards its ground speed along its forward axis based on how much of it's forward skid that it gripped
-            if (Grounded && HandBrake != 1f)
-            {
-                //this almost always goes to else, which means the wheels almost never visually wheelspin, but it still sounds like they do (because SkidVectorFX's forward componant is a hack).
-                //setting wheelweight very high does allow for proper wheel spins, but the vehicle physics gets ruined
-                WheelRotationSpeedSurf = Mathf.MoveTowards(WheelRotationSpeedSurf, ForwardSpeed, (ForceUsed / WheelWeight));
-                WheelRotationSpeedRPS = WheelRotationSpeedSurf / WheelCircumference;
-                WheelRotationSpeedRPM = WheelRotationSpeedRPS * 60f;
-                // if (PrintDebugValues)
-                // {
-                //     Debug.Log(string.Concat("(Mathf.Abs(ForwardSlip)): ", ((Mathf.Abs(ForwardSlip))).ToString()));
-                //     Debug.Log(string.Concat("SlipGrip / Time.deltaTime: ", (SlipGrip / Time.deltaTime).ToString()));
-                // }
-            }
-            else
-            {
-                SkidVectorFX += (Vector3.forward * Mathf.Abs(ForwardSlip));
-            }
-            //wheels slow down due to ?friction
-            WheelRotationSpeedSurf = Mathf.Lerp(WheelRotationSpeedSurf, 0, WheelPhysicsDelta * CurrentWheelSlowDown);
+            //brake
+            WheelRotationSpeedSurf = Mathf.MoveTowards(WheelRotationSpeedSurf, 0f, BrakeStrength * Brake);
+            WheelRotationSpeedSurf = Mathf.Lerp(WheelRotationSpeedSurf, 0f, HandBrake);
             WheelRotationSpeedRPS = WheelRotationSpeedSurf / WheelCircumference;
             WheelRotationSpeedRPM = WheelRotationSpeedRPS * 60f;
 
-            //move engine speed towards wheel speed
-            //lerp engine speed towards wheel speed if the handbrake is on
+            // adjust engine speed
             if (IsDriveWheel && !GearNeutral)
             {
-                //gear ratio shouldnt be used here but would have to change engineinfluence in all prefabs to compensate
-                SGVControl.Revs = Mathf.MoveTowards(SGVControl.Revs, (WheelRotationSpeedRPM / _GearRatio), ((ForceUsed * Mathf.Abs(_GearRatio)) * EngineInfluence * (1f - Clutch)));
-                //lerp engine towards wheel speed of handbrake is being used
+                slowing = (ForwardSlip < 0 && (_GearRatio > 0)) || ((ForwardSlip > 0) && (_GearRatio < 0));
+                // (slowing ? 1 : -(1f - Clutch)) means use clutch if speeding up the engine, but don't use clutch if slowing down the engine.
+                // because clutch was already used in the input in the slowing down case.
+                // if removed, using the clutch can give a speed boost since the engine doesn't slow down by the correct amount relative to force produced.
+                float ThisEngineForceUsed = Mathf.Abs(ForceUsed) * Mathf.Abs(_GearRatio) * EngineInfluence * (slowing ? 1 : -(1f - Clutch));
+                SGVControl.SetProgramVariable("EngineForceUsed", (float)SGVControl.GetProgramVariable("EngineForceUsed") + ThisEngineForceUsed);
             }
-            SkidVectorFX += Vector3.forward * (WheelRotationSpeedSurf - WheelRotationSpeedSurfPrev);//works but stupid
-                                                                                                    //this would be a better way to do it, but slipgrip is broken so you would never get forward skidding sounds
-                                                                                                    //SkidVectorFX += Vector3.forward * SlipGrip;
             SkidLength = SkidVectorFX.magnitude;
         }
         private void LateUpdate()
         {
-            if (!Sleeping)
+            if (Sleeping) return;
+            if (IsOwner)
             {
-                if (IsOwner)
+                if (Time.time - lastSync > SyncInterval)
                 {
-                    if (WheelRenderer.isVisible)
+                    bool Skidding = SkidLength < SkidSound_Min_THREEQUARTER;
+                    if (!(!Skidding && !SkidLength_SkiddingLast))//if last send was (not skidding) and it's still (not skidding) don't send
                     {
-                        RotateWheelOwner();
+                        lastSync = Time.time;
+                        SkidLength_SkiddingLast = Skidding;
+                        RequestSerialization();
                     }
                 }
-                else
+                SkidLength_Smoothed = SkidLength;
+                if (WheelRenderer.isVisible)
                 {
-                    if (WheelRenderer.isVisible)
-                    {
-                        RotateWheelOther();
-                        Suspension_VisualOnly();
-                    }
+                    RotateWheelOwner();
                 }
-                if (DisableEffects) { return; }
-                if (Grounded && !CurrentlyDistant)
+            }
+            else
+            {
+                if (WheelRenderer.isVisible)
                 {
-                    float skidvol = Mathf.Min((SkidLength - SkidSound_Min) * SkidSound_VolumeIncrease, 1);
-                    if (skidvol > 0)
+                    RotateWheelOther();
+                    Suspension_VisualOnly();
+                }
+            }
+            if (DisableEffects) { return; }
+            if (Grounded && !CurrentlyDistant)
+            {
+                float skidvol = Mathf.Min((SkidLength_Smoothed - SkidSound_Min) * SkidSound_VolumeIncrease, 1);
+                if (skidvol > 0)
+                {
+                    if (SkidSound)
                     {
-                        if (SkidSound)
+                        if (!SkidSoundPlayingLast)
                         {
-                            if (!SkidSoundPlayingLast)
-                            {
-                                StartSkidSound();
-                            }
-                            SkidSound.volume = skidvol * SkidVolumeMulti;
-                            SkidSound.pitch = (SkidLength * SkidSound_PitchIncrease) + SkidSound_Pitch;
+                            StartSkidSound();
                         }
-                        if (SkidParticle)
-                        {
-                            if (!SkidParticlePlayingLast)
-                            {
-                                StartSkidParticle();
-                            }
-                            SkidParticleEM.rateOverTime = SkidLength * CurrentNumParticles;
-                        }
+                        SkidSound.volume = skidvol * SkidVolumeMulti;
+                        SkidSound.pitch = (SkidLength_Smoothed * SkidSound_PitchIncrease) + SkidSound_Pitch;
                     }
-                    else
+                    if (SkidParticle)
                     {
-                        if (SkidSoundPlayingLast)
-                        { StopSkidSound(); }
-                        if (SkidParticlePlayingLast)
-                        { StopSkidParticle(); }
+                        if (!SkidParticlePlayingLast)
+                        {
+                            StartSkidParticle();
+                        }
+                        SkidParticleEM.rateOverTime = SkidLength_Smoothed * CurrentNumParticles;
                     }
                 }
                 else
@@ -592,6 +583,13 @@ namespace SaccFlightAndVehicles
                     if (SkidParticlePlayingLast)
                     { StopSkidParticle(); }
                 }
+            }
+            else
+            {
+                if (SkidSoundPlayingLast)
+                { StopSkidSound(); }
+                if (SkidParticlePlayingLast)
+                { StopSkidParticle(); }
             }
         }
         public void PlayerEnterVehicle()
@@ -624,6 +622,7 @@ namespace SaccFlightAndVehicles
             if (SkidSound)
             {
                 SkidSound.gameObject.SetActive(true);
+                SkidSound.time = Random.Range(0, SkidSound.clip.length);
             }
             SkidSoundPlayingLast = true;
         }
@@ -637,22 +636,33 @@ namespace SaccFlightAndVehicles
         }
         private void RotateWheelOwner()
         {
-            WheelRotation += WheelRotationSpeedRPS * 360f * Time.deltaTime;
-            Quaternion newrot = Quaternion.AngleAxis(WheelRotation, Vector3.right);
-            WheelVisual.localRotation = newrot;
+            if (WheelVisual_RotationSource)
+                WheelVisual.localRotation = WheelVisual_RotationSource.WheelVisual.localRotation;
+            else
+            {
+                WheelRotation += WheelRotationSpeedRPS * 360f * Time.deltaTime;
+                Quaternion newrot = Quaternion.AngleAxis(WheelRotation, Vector3.right);
+                WheelVisual.localRotation = newrot;
+            }
         }
         private void RotateWheelOther()
         {
-            float speed = (float)SGVControl.GetProgramVariable("VehicleSpeed");
-            WheelRotationSpeedRPS = speed / WheelCircumference;
-            if ((bool)SGVControl.GetProgramVariable("MovingForward")) { WheelRotationSpeedRPS = -WheelRotationSpeedRPS; }
-            WheelRotation += WheelRotationSpeedRPS * 360f * Time.deltaTime;
-            Quaternion newrot = Quaternion.AngleAxis(WheelRotation, Vector3.right);
-            WheelVisual.localRotation = newrot;
+            if (WheelVisual_RotationSource)
+                WheelVisual.localRotation = WheelVisual_RotationSource.WheelVisual.localRotation;
+            else
+            {
+                float speed = SGVControl.VehicleSpeed;
+                WheelRotationSpeedRPS = speed / WheelCircumference;
+                if ((bool)SGVControl.GetProgramVariable("MovingForward")) { WheelRotationSpeedRPS = -WheelRotationSpeedRPS; }
+                WheelRotation += WheelRotationSpeedRPS * 360f * Time.deltaTime;
+                Quaternion newrot = Quaternion.AngleAxis(WheelRotation, Vector3.right);
+                WheelVisual.localRotation = newrot;
+            }
         }
         public void FallAsleep()
         {
-            SkidLength = 0;
+            SkidLength = SkidLength_Smoothed = 0;
+            LastTouchedTransform_Speed = Vector3.zero;
             Sleeping = true;
             StopSkidSound();
             StopSkidParticle();
@@ -660,45 +670,86 @@ namespace SaccFlightAndVehicles
         public void WakeUp()
         {
             Sleeping = false;
+            LastTouchedTransform_Speed = Vector3.zero;
+        }
+        private void GetTouchingTransformSpeed()
+        {
+            //Surface Movement
+            if (SusOut.collider.transform != LastTouchedTransform)
+            {
+                LastTouchedTransform = SusOut.collider.transform;
+                LastTouchedTransform_Position = LastTouchedTransform.position;
+                LastTouchedTransform_RB = SusOut.collider.attachedRigidbody;
+                if (LastTouchedTransform_RB && !LastTouchedTransform_RB.isKinematic)
+                {
+                    LastTouchedTransform_Speed = LastTouchedTransform_RB.GetPointVelocity(SusOut.point);
+                }
+                else
+                {
+                    LastTouchedTransform_Speed = Vector3.zero;
+                }
+            }
+            else
+            {
+                if (LastTouchedTransform_RB && !LastTouchedTransform_RB.isKinematic)
+                {
+                    LastTouchedTransform_Speed = LastTouchedTransform_RB.GetPointVelocity(SusOut.point);
+                }
+                else
+                {
+                    LastTouchedTransform_Speed = (LastTouchedTransform.position - LastTouchedTransform_Position) / Time.fixedDeltaTime;
+                    LastTouchedTransform_Position = LastTouchedTransform.position;
+                }
+            }
         }
         private int DoSurface;
+        private void CheckSurface()
+        {
+            //last character of surface object is its type
+            int SurfLastChar = SusOut.collider.gameObject.name[SusOut.collider.gameObject.name.Length - 1];
+            if (SurfLastChar >= '0' && SurfLastChar <= '9')
+            {
+                if (SurfaceType != SurfLastChar - '0')
+                {
+                    SurfaceType = SurfLastChar - '0';
+                    ChangeSurface();
+                }
+            }
+            else
+            {
+                if (SurfaceType != 0)
+                {
+                    SurfaceType = 0;
+                    ChangeSurface();
+                }
+            }
+        }
         private void Suspension_VisualOnly()
         {
-            RaycastHit SusOut;
             if (Physics.Raycast(WheelPoint.position + WheelPoint.up * ExtraRayCastDistance, -WheelPoint.up, out SusOut, SuspensionDistance + ExtraRayCastDistance, WheelLayers, QueryTriggerInteraction.Ignore))
             {
+                // disabled because not worth it just to see wheels spinning properly on other people's cars when they're on a moving object
+                // also needs code in other places to work properly (subtract from value from Velocity)
+                // GetTouchingTransformSpeed();
+
                 Grounded = true;
-                //last character of surface object is its type
                 //only check surface for vehicles that aren't mine once every 5 frames
                 DoSurface++;
                 if (DoSurface > 4)
                 {
+                    //Surface Type
                     DoSurface = 0;
-                    int SurfLastChar = SusOut.collider.gameObject.name[SusOut.collider.gameObject.name.Length - 1];
-                    if (SurfLastChar >= '0' && SurfLastChar <= '9')
-                    {
-                        if (SurfaceType != SurfLastChar - '0')
-                        {
-                            SurfaceType = SurfLastChar - '0';
-                            ChangeSurface();
-                        }
-                    }
-                    else
-                    {
-                        if (SurfaceType != 0)
-                        {
-                            SurfaceType = 0;
-                            ChangeSurface();
-                        }
-                    }
+                    CheckSurface();
                 }
                 if (SusOut.distance > ExtraRayCastDistance)
                 {
                     WheelVisual.position = SusOut.point + (WheelPoint.up * WheelRadius);
+                    if (WheelVisual_Ground) { WheelVisual_Ground.position = SusOut.point; }
                 }
                 else
                 {
                     WheelVisual.position = WheelPoint.position + (WheelPoint.up * WheelRadius);
+                    if (WheelVisual_Ground) { WheelVisual_Ground.position = WheelPoint.position; }
                 }
             }
             else
@@ -706,6 +757,7 @@ namespace SaccFlightAndVehicles
                 StopSkidSound();
                 StopSkidParticle();
                 WheelVisual.position = WheelPoint.position - (WheelPoint.up * (SuspensionDistance - WheelRadius));
+                if (WheelVisual_Ground) { WheelVisual_Ground.position = WheelPoint.position - (WheelPoint.up * (SuspensionDistance)); }
                 Grounded = false;
             }
         }
@@ -714,6 +766,47 @@ namespace SaccFlightAndVehicles
             WheelRotationSpeedRPS = 0;
             WheelRotationSpeedRPM = 0;
             WheelRotationSpeedSurf = 0;
+        }
+        public void UpdateOwner()
+        {
+            bool IsOwner_New = (bool)SGVControl.GetProgramVariable("IsOwner");
+            /*             if (IsOwner && !IsOwner_New)
+                        {
+                            //lose ownership
+                        }
+                        else  */
+            // if (!IsOwner && IsOwner_New)
+            // {
+            //take ownership
+            GroundPointLast = WheelPoint.position; // prevent 1 frame skid from last owned position
+            // }
+            IsOwner = IsOwner_New;
+        }
+        public void ResetGrip() { GroundPointLast = WheelPoint.position; }
+        public void SyncSkid()
+        {
+            if (!SyncSkid_Running) { return; }
+            if (IsOwner)
+            {
+                SyncSkid_Running = false;
+                return;
+            }
+            if (SkidLength < SkidSound_Min_THREEQUARTER && SkidLength_Smoothed < SkidSound_Min_THREEQUARTER)
+            {
+                SkidLength = 0;
+                SyncSkid_Running = false;
+                return;
+            }
+            SkidLength_Smoothed = Mathf.SmoothStep(SkidLength_Smoothed, SkidLength, SkidLength_SmoothStep);
+            SendCustomEventDelayedFrames(nameof(SyncSkid), 1);
+        }
+        public override void OnDeserialization()
+        {
+            if (SkidLength > SkidSound_Min_THREEQUARTER && !SyncSkid_Running)
+            {
+                SyncSkid_Running = true;
+                SyncSkid();
+            }
         }
 #if UNITY_EDITOR
         [Header("Editor Only, use in play mode")]
@@ -727,6 +820,22 @@ namespace SaccFlightAndVehicles
             {
                 Gizmos.DrawLine(ContactPoint, ContactPoint + ForceVector);
             }
+            Matrix4x4 newmatrix = transform.localToWorldMatrix;
+            Gizmos.matrix = Matrix4x4.TRS(newmatrix.GetPosition(), newmatrix.rotation, Vector3.one);// saccwheel does not respect scale
+            Gizmos.color = Color.yellow;
+            Gizmos.DrawWireCube(Vector3.up * ExtraRayCastDistance * .5f, new Vector3(.01f, ExtraRayCastDistance, .01f));
+            Gizmos.color = Color.cyan;
+            Gizmos.DrawWireCube(-Vector3.up * SuspensionDistance * .5f, new Vector3(.01f, SuspensionDistance, .01f));
+            Gizmos.color = Color.white;
+            //flatten matrix and draw a sphere to draw a circle for the wheel
+            newmatrix = transform.localToWorldMatrix;
+            Vector3 scale = new Vector3(0, 1, 1);// Flatten the x scale to make disc + saccwheel does not respect object scale so 1
+            Gizmos.matrix = Matrix4x4.TRS(newmatrix.GetPosition(), newmatrix.rotation, scale);
+            // UnityEditor.Handles.DrawWireDisc(transform.position + transform.up * WheelRadius, transform.right, WheelRadius); not exposed
+            if (running)
+                Gizmos.DrawWireSphere(Quaternion.Inverse(transform.rotation) * (WheelVisual.position - transform.position), WheelRadius);
+            else
+                Gizmos.DrawWireSphere(Vector3.up * WheelRadius, WheelRadius);
         }
 #endif
     }

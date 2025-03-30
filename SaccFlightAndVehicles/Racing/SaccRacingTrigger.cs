@@ -19,6 +19,13 @@ namespace SaccFlightAndVehicles
         public TextMeshProUGUI Racename_text;
         public TextMeshProUGUI Time_text;
         public TextMeshProUGUI SplitTime_text;
+        [Tooltip("This game object is enabled while waiting for race to start")]
+        public GameObject CountDownAnimation;
+        private int NumCountDowns;
+        private int NumCountDownDisables;
+        private SaccEntity Vehicle_EntityControl;//This script is not an SaccEntity extension behaviour
+        private SGV_GearBox Vehicle_GearBox;
+        private bool OverridingClutch;
         [System.NonSerialized, FieldChangeCallback(nameof(TrackForward))] public bool _TrackForward = true;
         public bool TrackForward
         {
@@ -57,6 +64,9 @@ namespace SaccFlightAndVehicles
         private float RaceFinishTime;
         private bool LoopFinalSplit = false;
         private bool Initialized = false;
+        private bool RaceCountdown = false;
+        private bool FreezeCar = false;
+        private bool AirStart;
         private void Initialize()
         {
             Initialized = true;
@@ -67,6 +77,8 @@ namespace SaccFlightAndVehicles
                 Objs = Objs.transform.parent.gameObject;
                 PlaneRigidbody = Objs.GetComponent<Rigidbody>();
             }
+            Vehicle_EntityControl = PlaneRigidbody.GetComponent<SaccEntity>();
+            Vehicle_GearBox = (SGV_GearBox)Vehicle_EntityControl.GetExtention(GetUdonTypeName<SGV_GearBox>());
             ThisCapsuleCollider = gameObject.GetComponent<CapsuleCollider>();
             ThisObjLayer = 1 << gameObject.layer;
             localPlayer = Networking.LocalPlayer;
@@ -90,16 +102,16 @@ namespace SaccFlightAndVehicles
         }
         private void Update()
         {
-            if (RaceOn)
+            if (RaceOn && !RaceCountdown)
             {
-                RaceTime = Time.realtimeSinceStartup - RaceStartTime;
+                RaceTime = Time.time - RaceStartTime;
                 if (Time_text) { Time_text.text = SecsToMinsSec(RaceTime); }
             }
         }
         private int CurrentSplit = 0;
         private void UpdateSplitTime(bool RaceEnded = false)
         {
-            CurrentSplits[CurrentSplit] = (Time.realtimeSinceStartup - RaceStartTime - CalcSubFrameTime());
+            CurrentSplits[CurrentSplit] = (Time.time - RaceStartTime - CalcSubFrameTime());
             float splitdif;
             if (TrackForward)
             {
@@ -159,19 +171,104 @@ namespace SaccFlightAndVehicles
             if (Physics.Raycast(PlaneClosestPos, PlaneRigidbody.GetPointVelocity(PlaneClosestPos), out hit, 50, ThisObjLayer, QueryTriggerInteraction.Collide))
             {
                 PlaneDistanceFromCheckPoint = hit.distance;
-                //Debug.Log("racetrigger hit");
-                //Debug.Log(string.Concat("dist: ", hit.distance));
             }
-            /*             else
-                        {
-                            Debug.Log("racetrigger miss");
-                        } */
             ThisCapsuleCollider.enabled = true;
+            if (RaceCountdown)
+            {
+                RaceStartTime = Time.time;
+                if (FreezeCar)
+                {
+                    MoveCarToStart();
+                    return;
+                }
+                Vector3 vel = PlaneRigidbody.velocity;
+                vel.x = 0; vel.z = 0;
+                PlaneRigidbody.velocity = vel;
+                Vector3 angvel = PlaneRigidbody.angularVelocity;
+                vel.y = 0; vel.z = 0;
+                PlaneRigidbody.angularVelocity = angvel;
+                Vector3 newpos = PlaneRigidbody.position;
+                if (TrackForward)
+                {
+                    if (CurrentCourse.StartPoint)
+                    {
+                        newpos = new Vector3(CurrentCourse.StartPoint.position.x, PlaneRigidbody.position.y, CurrentCourse.StartPoint.position.z);
+                    }
+                }
+                else
+                {
+                    if (CurrentCourse.StartPoint_Reverse)
+                    {
+                        newpos = new Vector3(CurrentCourse.StartPoint_Reverse.position.x, PlaneRigidbody.position.y, CurrentCourse.StartPoint_Reverse.position.z);
+                    }
+                }
+                PlaneRigidbody.position = newpos;
+            }
+        }
+        public void MoveCarToStart()
+        {
+            PlaneRigidbody.velocity = Vector3.zero;
+            PlaneRigidbody.angularVelocity = Vector3.zero;
+            if (TrackForward)
+            {
+                if (CurrentCourse.StartPoint)
+                {
+                    PlaneRigidbody.position = CurrentCourse.StartPoint.position;
+                    PlaneRigidbody.rotation = CurrentCourse.StartPoint.rotation;
+                }
+                else { Debug.LogWarning(CurrentCourse.name + ": Race Start Point is null"); }
+            }
+            else
+            {
+                if (CurrentCourse.StartPoint_Reverse)
+                {
+                    PlaneRigidbody.position = CurrentCourse.StartPoint_Reverse.position;
+                    PlaneRigidbody.rotation = CurrentCourse.StartPoint_Reverse.rotation;
+                }
+                else { Debug.LogWarning(CurrentCourse.name + ": Reverse Race Start Point is null"); }
+            }
+        }
+        public void SetFreezeCarFalse()
+        {
+            FreezeCar = false;
+            SendCustomEventDelayedSeconds(nameof(SetDeadFalse), Time.fixedDeltaTime * 2f);
+        }
+        public void SetDeadFalse() { Vehicle_EntityControl.dead = false; }
+        public void SetRaceCountdownFalse()
+        {
+            NumCountDowns--;
+            NumCountDownDisables++;
+            if (AirStart)
+            {
+                SetFreezeCarFalse();
+            }
+            float launchspd = CurrentCourse.LaunchSpeed;
+            if (launchspd > 0f)
+            { PlaneRigidbody.velocity = PlaneRigidbody.transform.forward * CurrentCourse.LaunchSpeed; }
+            SendCustomEventDelayedSeconds(nameof(DisableCountDownAnimation), 3f);
+            if (NumCountDowns != 0) { return; }
+            RaceCountdown = false;
+            if (OverridingClutch)
+            {
+                OverridingClutch = false;
+                if (Vehicle_GearBox)
+                {
+                    Vehicle_GearBox.ClutchOverride_--;
+                }
+            }
+        }
+        public void DisableCountDownAnimation()
+        {
+            NumCountDownDisables--;
+            if (NumCountDownDisables != 0) { return; }
+            if (CountDownAnimation)
+            { CountDownAnimation.SetActive(false); }
         }
         void ReportTime()
         {
+            Vehicle_EntityControl.SendEventToExtensions("SFEXT_L_FinishRace");
             //Debug.Log("Finish Race!");
-            RaceFinishTime = Time.realtimeSinceStartup;
+            RaceFinishTime = Time.time;
             RaceTime = LastTime = (RaceFinishTime - RaceStartTime - CalcSubFrameTime());
             CurrentCourse.TimeReporter.MyLastRace_Reverse = !TrackForward;
             if (TrackForward || !CurrentTrackAllowReverse)//track was finished forward
@@ -181,7 +278,6 @@ namespace SaccFlightAndVehicles
                 //add submit my time
                 CurrentCourse.TimeReporter.MyLastTime = RaceTime;
                 CurrentCourse.TimeReporter.MyLastVehicle = PlaneName;
-                CurrentCourse.UpdateMyLastTime();
                 int mypos = CurrentCourse.CheckIfOnBoard(localPlayer.displayName, ref CurrentCourse.PlayerNames);
                 if (mypos < 0)//i am not on the board
                 {
@@ -195,7 +291,7 @@ namespace SaccFlightAndVehicles
                 }
                 else//i am on the board
                 {
-                    if (RaceTime < CurrentCourse.PlayerTimes[mypos])
+                    // if (RaceTime < CurrentCourse.PlayerTimes[mypos])
                     { SendMyTime(false); }
                 }
             }
@@ -203,7 +299,6 @@ namespace SaccFlightAndVehicles
             {
                 CurrentCourse.TimeReporter.MyLastTime_R = RaceTime;
                 CurrentCourse.TimeReporter.MyLastVehicle_R = PlaneName;
-                CurrentCourse.UpdateMyLastTime();
                 int mypos = CurrentCourse.CheckIfOnBoard(localPlayer.displayName, ref CurrentCourse.PlayerNames_R);
                 if (mypos < 0)//i am not on the board
                 {
@@ -217,7 +312,7 @@ namespace SaccFlightAndVehicles
                 }
                 else//i am on the board
                 {
-                    if (RaceTime < CurrentCourse.PlayerTimes_R[mypos])
+                    // if (RaceTime < CurrentCourse.PlayerTimes_R[mypos])
                     { SendMyTime(true); }
                 }
             }
@@ -255,7 +350,7 @@ namespace SaccFlightAndVehicles
         void OnTriggerEnter(Collider other)
         {
             if (
-                (Time.realtimeSinceStartup - RaceFinishTime < 2f && !CurrentCourse.LoopRace)
+                (Time.time - RaceFinishTime < 2f && !CurrentCourse.LoopRace)
                 || (CurrentCourseSelection == -1 || (other && other.gameObject != CurrentCourse.RaceCheckpoints[NextCheckpoint]))
                 ) { return; }
             if (NextCheckpoint == FinalCheckpoint)//end of the race
@@ -291,12 +386,36 @@ namespace SaccFlightAndVehicles
                     ReportTime();
                     LoopFinalSplit = false;
                 }
+                if (CurrentCourse.StartFromStill)
+                {
+                    if (PlaneRigidbody)
+                    {
+                        RaceCountdown = true;
+                        FreezeCar = true;
+                        NumCountDowns++;
+                        Vehicle_EntityControl.dead = true;//make invincible for teleport
+                        SendCustomEventDelayedSeconds(nameof(SetRaceCountdownFalse), CurrentCourse.CountDownLength);
+                        if (!AirStart)
+                        { SendCustomEventDelayedSeconds(nameof(SetFreezeCarFalse), .2f); }
+                        if (CountDownAnimation)
+                        { CountDownAnimation.SetActive(true); }
+                        if (!OverridingClutch)
+                        {
+                            OverridingClutch = true;
+                            if (Vehicle_GearBox)
+                            {
+                                Vehicle_GearBox.ClutchOverride_++;
+                            }
+                        }
+                    }
+                }
+                Vehicle_EntityControl.SendEventToExtensions("SFEXT_L_StartRace");
                 RaceTime = 0;
                 CurrentSplits = new float[CurrentCourse.RaceCheckpoints.Length];
                 CurrentSplit = 0;
 
                 //Debug.Log("Start Race!");
-                RaceStartTime = Time.realtimeSinceStartup - CalcSubFrameTime();
+                RaceStartTime = Time.time - CalcSubFrameTime();
                 RaceOn = true;
                 if (!InProgress)
                 {
@@ -359,8 +478,13 @@ namespace SaccFlightAndVehicles
             CurrentCourseSelection = RaceToggler.CurrentCourseSelection;
             if (CurrentCourseSelection != -1)
             {
-                if (Racename_text) { Racename_text.text = RaceToggler.Races[CurrentCourseSelection].RaceName; }
+                if (Racename_text)
+                {
+                    Racename_text.text = RaceToggler.Races[CurrentCourseSelection].RaceName;
+                    if (!TrackForward) { Racename_text.text += " (R)"; }
+                }
                 CurrentCourse = RaceToggler.Races[CurrentCourseSelection].GetComponent<SaccRaceCourseAndScoreboard>();
+                AirStart = CurrentCourse.AirStart;
                 CurrentTrackAllowReverse = CurrentCourse.AllowReverse;
                 if (TrackForward || !CurrentTrackAllowReverse)
                 {
@@ -408,6 +532,23 @@ namespace SaccFlightAndVehicles
         {
             TurnOffCurrentCheckPoints();
             TimerTextCounter++; SetTimerEmpty();
+            if (CountDownAnimation)
+            { CountDownAnimation.SetActive(false); }
+            if (OverridingClutch)
+            {
+                OverridingClutch = false;
+                if (Vehicle_GearBox)
+                {
+                    Vehicle_GearBox.ClutchOverride_--;
+                }
+            }
+            RaceCountdown = false;
+            SetFreezeCarFalse();
+            if (RaceOn)
+            {
+                Vehicle_EntityControl.SendEventToExtensions("SFEXT_L_CancelRace");
+            }
+            RaceOn = false;
         }
         public void TurnOffCurrentCheckPoints()
         {

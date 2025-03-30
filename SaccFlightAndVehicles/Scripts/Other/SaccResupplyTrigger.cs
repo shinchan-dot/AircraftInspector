@@ -10,7 +10,7 @@ namespace SaccFlightAndVehicles
     public class SaccResupplyTrigger : UdonSharpBehaviour
     {
         [Tooltip("Object to send event to")]
-        public SaccEntity SendEventTo;
+        public UdonSharpBehaviour SendEventTo;
         [Tooltip("Delay after entering a respply zone before the event is first sent")]
         public float ResupplyInitialDelay = 1;
         [Tooltip("Delay between resupplies")]
@@ -18,7 +18,6 @@ namespace SaccFlightAndVehicles
         [Tooltip("Layer to check for resupply triggers on")]
         public int ResupplyLayer = 27;
         [Tooltip("Name of event sent by this trigger")]
-        public string EventName = "SFEXT_O_ReSupply";
         private float LastResupplyTime = 0;
         private int NumTriggers = 0;
         private bool InResupplyZone;
@@ -35,16 +34,44 @@ namespace SaccFlightAndVehicles
                 if (Time.time - LastResupplyTime > ResupplyDelay)
                 {
                     LastResupplyTime = Time.time;
-                    SendEventTo.SendEventToExtensions(EventName);
+                    switch (supplyType)
+                    {
+                        case -1: // ALL
+                            SendEventTo.SendCustomEvent("ReSupply");
+                            break;
+                        case 0: // FUEL
+                            SendEventTo.SendCustomEvent("ReFuel");
+                            break;
+                        case 1: // AMMO
+                            SendEventTo.SendCustomEvent("ReArm");
+                            break;
+                        case 2: // REPAIRS
+                            SendEventTo.SendCustomEvent("RePair");
+                            break;
+                    }
                 }
             }
         }
+        int supplyType = -1; // Default to -1 if no matching child is found
+        string[] supplyNames = { "xSUPPLY_FUEL", "xSUPPLY_AMMO", "xSUPPLY_REPAIR" };
         private void OnTriggerEnter(Collider other)
         {
             if (other && other.gameObject.layer == ResupplyLayer)
             {
-                float tim = Time.time;
-                if (NumTriggers == 0) { LastResupplyTime = Mathf.Min((tim + ResupplyDelay) - ResupplyInitialDelay, tim); }
+                supplyType = -1;
+                if (other.transform.childCount > 0)
+                {
+                    for (int i = 0; i < supplyNames.Length; i++)
+                    {
+                        Transform child = other.transform.Find(supplyNames[i]);
+                        if (child != null)
+                        {
+                            supplyType = i; // Set supplyType to the index of the matching child
+                            break;          // Exit the loop once a match is found
+                        }
+                    }
+                }
+                if (NumTriggers == 0) { LastResupplyTime = Time.time - ResupplyDelay + ResupplyInitialDelay; }
                 NumTriggers += 1;
                 InResupplyZone = true;
             }

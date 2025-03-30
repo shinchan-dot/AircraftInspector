@@ -1,8 +1,8 @@
-Shader "SF-1/HUDText"
+Shader "SaccFlight/HUDText"
 {
 	Properties
 	{
-		_Color ("Tint", Color) = (1,1,1,1)
+		[HDR] _Color ("Tint", Color) = (1,1,1,1)
 		_StencilComp ("Stencil Comparison", Float) = 3
 		_Stencil ("Stencil ID", Float) = 1
 		_StencilOp ("Stencil Operation", Float) = 1
