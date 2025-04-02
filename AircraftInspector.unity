@@ -31791,7 +31791,7 @@ GameObject:
   - component: {fileID: 503904491}
   - component: {fileID: 503904493}
   - component: {fileID: 503904492}
-  m_Layer: 5
+  m_Layer: 0
   m_Name: Image
   m_TagString: Untagged
   m_Icon: {fileID: 0}
@@ -33075,7 +33075,7 @@ GameObject:
   - component: {fileID: 524418661}
   - component: {fileID: 524418663}
   - component: {fileID: 524418662}
-  m_Layer: 5
+  m_Layer: 0
   m_Name: Text (TMP)
   m_TagString: Untagged
   m_Icon: {fileID: 0}
@@ -34344,7 +34344,7 @@ GameObject:
   - component: {fileID: 549032553}
   - component: {fileID: 549032555}
   - component: {fileID: 549032554}
-  m_Layer: 5
+  m_Layer: 0
   m_Name: Text (TMP) Change2
   m_TagString: Untagged
   m_Icon: {fileID: 0}
@@ -41105,7 +41105,7 @@ GameObject:
   - component: {fileID: 721015813}
   - component: {fileID: 721015812}
   - component: {fileID: 721015811}
-  m_Layer: 5
+  m_Layer: 0
   m_Name: Canvas
   m_TagString: Untagged
   m_Icon: {fileID: 0}
@@ -58210,7 +58210,7 @@ GameObject:
   - component: {fileID: 1060543984}
   - component: {fileID: 1060543986}
   - component: {fileID: 1060543985}
-  m_Layer: 5
+  m_Layer: 0
   m_Name: Text (TMP)
   m_TagString: Untagged
   m_Icon: {fileID: 0}
@@ -61577,7 +61577,7 @@ GameObject:
   - component: {fileID: 1144200597}
   - component: {fileID: 1144200599}
   - component: {fileID: 1144200598}
-  m_Layer: 5
+  m_Layer: 0
   m_Name: Text (TMP) Change1
   m_TagString: Untagged
   m_Icon: {fileID: 0}
@@ -71344,7 +71344,7 @@ GameObject:
   - component: {fileID: 1393281604}
   - component: {fileID: 1393281606}
   - component: {fileID: 1393281605}
-  m_Layer: 5
+  m_Layer: 0
   m_Name: Text (TMP) JP
   m_TagString: Untagged
   m_Icon: {fileID: 0}
@@ -75925,7 +75925,7 @@ PrefabInstance:
     - target: {fileID: 5005528483114257071, guid: 256ae63fc2e0baf4b8674b340ae39102,
         type: 3}
       propertyPath: m_LocalPosition.z
-      value: 3.5
+      value: -0
       objectReference: {fileID: 0}
     - target: {fileID: 5005528483114257071, guid: 256ae63fc2e0baf4b8674b340ae39102,
         type: 3}
@@ -75950,7 +75950,7 @@ PrefabInstance:
     - target: {fileID: 5005528483114257071, guid: 256ae63fc2e0baf4b8674b340ae39102,
         type: 3}
       propertyPath: m_AnchoredPosition.x
-      value: -0
+      value: 0.02
       objectReference: {fileID: 0}
     - target: {fileID: 5005528483114257071, guid: 256ae63fc2e0baf4b8674b340ae39102,
         type: 3}
@@ -75990,6 +75990,16 @@ PrefabInstance:
       value: 
       objectReference: {fileID: 11400000, guid: 8f586378b4e144a9851e7b34d9b748ee,
         type: 2}
+    - target: {fileID: 6038298721666181580, guid: 256ae63fc2e0baf4b8674b340ae39102,
+        type: 3}
+      propertyPath: m_LocalPosition.x
+      value: 3.14
+      objectReference: {fileID: 0}
+    - target: {fileID: 6038298721666181580, guid: 256ae63fc2e0baf4b8674b340ae39102,
+        type: 3}
+      propertyPath: m_LocalPosition.z
+      value: 2.42
+      objectReference: {fileID: 0}
     - target: {fileID: 6855593094610096491, guid: 256ae63fc2e0baf4b8674b340ae39102,
         type: 3}
       propertyPath: m_fontAsset
@@ -76152,7 +76162,7 @@ PrefabInstance:
     - target: {fileID: 7633695118807737447, guid: 256ae63fc2e0baf4b8674b340ae39102,
         type: 3}
       propertyPath: m_LocalPosition.x
-      value: -20.15
+      value: -16.279
       objectReference: {fileID: 0}
     - target: {fileID: 7633695118807737447, guid: 256ae63fc2e0baf4b8674b340ae39102,
         type: 3}
@@ -76162,27 +76172,17 @@ PrefabInstance:
     - target: {fileID: 7633695118807737447, guid: 256ae63fc2e0baf4b8674b340ae39102,
         type: 3}
       propertyPath: m_LocalPosition.z
-      value: 0.69
+      value: -1.334
       objectReference: {fileID: 0}
     - target: {fileID: 7633695118807737447, guid: 256ae63fc2e0baf4b8674b340ae39102,
         type: 3}
       propertyPath: m_LocalRotation.w
-      value: 0.923879
-      objectReference: {fileID: 0}
-    - target: {fileID: 7633695118807737447, guid: 256ae63fc2e0baf4b8674b340ae39102,
-        type: 3}
-      propertyPath: m_LocalRotation.x
-      value: 0.00000143982
+      value: 0.38268343
       objectReference: {fileID: 0}
     - target: {fileID: 7633695118807737447, guid: 256ae63fc2e0baf4b8674b340ae39102,
         type: 3}
       propertyPath: m_LocalRotation.y
-      value: 0.38268474
-      objectReference: {fileID: 0}
-    - target: {fileID: 7633695118807737447, guid: 256ae63fc2e0baf4b8674b340ae39102,
-        type: 3}
-      propertyPath: m_LocalRotation.z
-      value: 0.0000005735829
+      value: 0.92387956
       objectReference: {fileID: 0}
     - target: {fileID: 7633695118807737447, guid: 256ae63fc2e0baf4b8674b340ae39102,
         type: 3}
@@ -76192,7 +76192,7 @@ PrefabInstance:
     - target: {fileID: 7633695118807737447, guid: 256ae63fc2e0baf4b8674b340ae39102,
         type: 3}
       propertyPath: m_LocalEulerAnglesHint.y
-      value: 45.000004
+      value: 135
       objectReference: {fileID: 0}
     - target: {fileID: 7633695118807737447, guid: 256ae63fc2e0baf4b8674b340ae39102,
         type: 3}
@@ -76931,7 +76931,7 @@ GameObject:
   - component: {fileID: 1530978631}
   - component: {fileID: 1530978630}
   - component: {fileID: 1530978629}
-  m_Layer: 5
+  m_Layer: 0
   m_Name: Canvas
   m_TagString: Untagged
   m_Icon: {fileID: 0}
