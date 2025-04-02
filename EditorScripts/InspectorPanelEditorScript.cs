@@ -52,6 +52,7 @@ namespace SaccFlightAndVehicles
             PutInputField("Mass", x, y += dy);
             PutInputField("GroundDetectorRayDistance", x, y += dy);
             PutInputField("Health", x, y += dy);
+            PutInputField("ExplodeHealth", x, y += dy);
             PutToggle("RepeatingWorld", x, y += dy);
             PutInputField("RepeatingWorldDistance", x, y += dy);
             PutToggle("HasAfterburner", x, y += dy);
@@ -88,9 +89,9 @@ namespace SaccFlightAndVehicles
             PutInputField("InertiaTensorRotationMulti", x, y += dy);
             PutToggle("InvertITRYaw", x, y += dy);
             PutInputField("AdverseYaw", x, y += dy);
-            PutInputField("AdverseRoll", x, y += dy);
             x += dx;
             y = initY;
+            PutInputField("AdverseRoll", x, y += dy);
             PutInputField("RotMultiMaxSpeed", x, y += dy);
             PutInputField("VelStraightenStrPitch", x, y += dy);
             PutInputField("VelStraightenStrYaw", x, y += dy);
@@ -104,10 +105,12 @@ namespace SaccFlightAndVehicles
             PutInputField("YawAoaRollForceMulti", x, y += dy);
             PutInputField("HighPitchAoaMinLift", x, y += dy);
             PutInputField("HighYawAoaMinLift", x, y += dy);
+            PutInputField("ZeroLiftAoA", x, y += dy);
             PutInputField("TaxiRotationSpeed", x, y += dy);
             PutInputField("TaxiRotationResponse", x, y += dy);
             PutToggle("DisallowTaxiRotationWhileStill", x, y += dy);
             PutInputField("TaxiFullTurningSpeed", x, y += dy);
+            PutToggle("WheelSuspension", x, y += dy);
             PutInputField("Lift", x, y += dy);
             PutInputField("SidewaysLift", x, y += dy);
             PutInputField("MaxLift", x, y += dy);
@@ -115,6 +118,8 @@ namespace SaccFlightAndVehicles
             PutInputField("VelLiftMax", x, y += dy);
             PutInputField("MaxGs", x, y += dy);
             PutInputField("GDamage", x, y += dy);
+            PutInputField("Crash_Damage_Speed", x, y += dy);
+            PutInputField("Crash_Death_Speed", x, y += dy);
             PutInputField("GroundEffectMaxDistance", x, y += dy);
             PutInputField("GroundEffectStrength", x, y += dy);
             PutInputField("GroundEffectLiftMax", x, y += dy);
@@ -126,13 +131,13 @@ namespace SaccFlightAndVehicles
             PutInputField("VTOLMaxAngle", x, y += dy);
             PutInputField("VTOLPitchThrustVecMulti", x, y += dy);
             PutInputField("VTOLYawThrustVecMulti", x, y += dy);
+            x += dx;
+            y = initY;
             PutInputField("VTOLRollThrustVecMulti", x, y += dy);
             PutInputField("VTOLLoseControlSpeed", x, y += dy);
             PutInputField("VTOLGroundEffectStrength", x, y += dy);
             PutInputField("EnterVTOLEvent_Angle", x, y += dy);
-            PutToggle("AutoAdjustValuesToMass", x, y += dy);
-            x += dx;
-            y = initY;
+            PutToggle("ReverseThrustAllowAfterburner", x, y += dy);
             PutInputField("SoundBarrierStrength", x, y += dy);
             PutInputField("SoundBarrierWidth", x, y += dy);
             PutInputField("Fuel", x, y += dy);
@@ -155,6 +160,7 @@ namespace SaccFlightAndVehicles
             PutInputField("AtmosphereThinningStart", x, y += dy);
             PutInputField("AtmosphereThinningEnd", x, y += dy);
             PutToggle("SquareJoyInput", x, y += dy);
+            PutToggle("DroneMode", x, y += dy);
         }
 
         private void PutInputField(string variableName, float x, float y)

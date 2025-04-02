@@ -1,4 +1,4 @@
-
+﻿
 using UdonSharp;
 using UnityEngine;
 using VRC.SDKBase;
@@ -61,6 +61,14 @@ namespace SaccFlightAndVehicles
             SeaLevel = (float)SAVControl.GetProgramVariable("SeaLevel");
             CenterOfMass = EntityControl.CenterOfMass;
         }
+
+        //==AircraftInspector==
+        public void ReAdjustValues()
+        {
+            SeaLevel = (float)SAVControl.GetProgramVariable("SeaLevel");
+        }
+        //==AircraftInspector==
+
         private void OnEnable()
         {
             maxGs = 0f;
