@@ -1752,10 +1752,14 @@ namespace SaccFlightAndVehicles
 
             if (HUDController == null)
             {
-                Transform t = VehicleEntity.transform.Find("InVehicleOnly").Find("HUDController");
-                if (t) //HUDControllerは無いこともある
+                Transform InVehicleOnly = VehicleEntity.transform.Find("InVehicleOnly");
+                if (InVehicleOnly) //InVehicleOnlyは無いこともある
                 {
-                    HUDController = t.GetComponent<SAV_HUDController>();
+                    Transform t = InVehicleOnly.Find("HUDController");
+                    if (t) //HUDControllerは無いこともある
+                    {
+                        HUDController = t.GetComponent<SAV_HUDController>();
+                    }
                 }
             }
 
