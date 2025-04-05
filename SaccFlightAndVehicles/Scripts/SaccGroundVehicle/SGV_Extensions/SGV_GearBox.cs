@@ -23,9 +23,9 @@ namespace SaccFlightAndVehicles
         [Tooltip("How often the automatic mode can change gear")]
         public float AutomaticGearChangeDelay = .25f;
         [Tooltip("In automatic mode, when revs are above this percentage, the gear will increase")]
-        public float GearChangeRevsUpper = .8f;
+        public float GearChangeRevsUpper = .9f;
         [Tooltip("In automatic mode, when revs are below this percentage, the gear will decrease")]
-        public float GearChangeRevsLower = .3f;
+        public float GearChangeRevsLower = .4f;
         [Tooltip("Use left controller stick to change gear instead?")]
         public bool GearsLeftController = false;
         [Tooltip("Use the left controller grip for clutch? Disable for right")]
@@ -40,16 +40,20 @@ namespace SaccFlightAndVehicles
         [Tooltip("If clutch input is bleow this amount, input is clamped to min")]
         public float LowerDeadZone = .05f;
         [Tooltip("Set this to your neutral gear")]
-        [System.NonSerialized]
-        public bool InvertVRGearChangeDirection;
+        [System.NonSerialized] public bool InvertVRGearChangeDirection;
+        [Tooltip("How long the clutch to stays at max when changing gear")]
+        public float AutoClutch_StayPressed = 0;
+        [Tooltip("How long for the clutch to return to 0 after changing gear")]
+        public float AutoClutch_Length = 0.5f;
         private SaccEntity EntityControl;
-        [UdonSynced, FieldChangeCallback(nameof(CurrentGear))] public int _CurrentGear = 1;
-        public int CurrentGear
+        [UdonSynced, FieldChangeCallback(nameof(CurrentGear))] public byte _CurrentGear = 1;
+        public byte CurrentGear
         {
             set
             {
                 SGVControl.SetProgramVariable("CurrentGear", value);
                 SGVControl.SetProgramVariable("GearRatio", GearRatios[value] * FinalDrive);
+                SGVControl.SendCustomEvent("UpdateGearRatio");
                 if (value == NeutralGear)
                 { InNeutralGear = true; }
                 else { InNeutralGear = false; }
@@ -66,9 +70,33 @@ namespace SaccFlightAndVehicles
                 else
                 { EntityControl.SendEventToExtensions("SFEXT_G_CarGearDown"); }
                 EntityControl.SendEventToExtensions("SFEXT_G_CarChangeGear");
+                if (EntityControl.IsOwner)
+                {
+                    AutoClutch = 1 + ClutchDecaySpeed * AutoClutch_StayPressed;
+                    SGVControl.SetProgramVariable("Clutch", Mathf.Max(_ClutchOverride, Mathf.Min(1, AutoClutch)));
+                    if (!ClutchTransitioning)
+                    {
+                        ClutchTransitioning = true;
+                        ClutchTransition();
+                    }
+                }
                 _CurrentGear = value;
             }
             get => _CurrentGear;
+        }
+        private float AutoClutch;
+        private bool ClutchTransitioning = false;
+        private float ClutchDecaySpeed;
+        public void ClutchTransition()
+        {
+            AutoClutch -= ClutchDecaySpeed * Time.deltaTime;
+            if (AutoClutch < 0)
+            {
+                AutoClutch = 0;
+                ClutchTransitioning = false;
+                return;
+            }
+            SendCustomEventDelayedFrames(nameof(ClutchTransition), 1);
         }
         [Header("Debug")]
         [System.NonSerializedAttribute] public bool _ClutchOverrideOne = false;
@@ -92,7 +120,7 @@ namespace SaccFlightAndVehicles
             }
             get => ClutchOverride;
         }
-        private int NeutralGear;
+        private byte NeutralGear;
         private bool InNeutralGear = false;
         private bool InMaxGear = false;
         private bool InMinGear = false;
@@ -117,18 +145,23 @@ namespace SaccFlightAndVehicles
         {
             EntityControl = (SaccEntity)SGVControl.GetProgramVariable("EntityControl");
             InVR = EntityControl.InVR;
-            SGVControl.SetProgramVariable("GearRatio", GearRatios[_CurrentGear]);
             RevLimiter = (float)SGVControl.GetProgramVariable("RevLimiter");
             for (int i = 0; i < GearRatios.Length; i++)
             {
                 if (GearRatios[i] == 0f)
                 {
-                    NeutralGear = i;
+                    NeutralGear = (byte)i;
                     break;
                 }
             }
+            if (AutoClutch_Length <= 0) { ClutchDecaySpeed = Mathf.Infinity; }
+            else { ClutchDecaySpeed = 1 / AutoClutch_Length; }
             CurrentGear = NeutralGear;
+            SGVControl.SetProgramVariable("GearRatio", GearRatios[_CurrentGear]);
+            gameObject.SetActive(true);
+            SendCustomEventDelayedSeconds(nameof(disableSelf), 5); // enable for a bit to run initial deserialization now instead of when you get in to prevent wrong gear bug
         }
+        public void disableSelf() { if (!Occupied) gameObject.SetActive(false); }
         private void LateUpdate()
         {
             if (Piloting)
@@ -182,7 +215,6 @@ namespace SaccFlightAndVehicles
                 }
                 if (Automatic)
                 {
-
                     if (Input.GetKeyDown(GearUpKey))
                     {
                         AutomaticReversing = !AutomaticReversing;
@@ -206,7 +238,6 @@ namespace SaccFlightAndVehicles
                 }
                 else
                 {
-                    float kbclutch = 0;
                     if (!ClutchDisabled)
                     {
                         if (ClutchLeftController)
@@ -217,13 +248,13 @@ namespace SaccFlightAndVehicles
                         {
                             Trigger = Input.GetAxisRaw("Oculus_CrossPlatform_SecondaryHandTrigger");
                         }
-                        kbclutch = Input.GetKey(ClutchKey) ? 1f : 0f;
                     }
+                    float kbclutch = Input.GetKey(ClutchKey) ? 1f : 0f;
                     if (Trigger > UpperDeadZone)
                     { Trigger = 1f; }
                     if (Trigger < LowerDeadZone)
                     { Trigger = 0f; }
-                    SGVControl.SetProgramVariable("Clutch", Mathf.Max(Trigger, kbclutch, _ClutchOverride));
+                    SGVControl.SetProgramVariable("Clutch", Mathf.Max(Trigger, kbclutch, _ClutchOverride, Mathf.Min(1, AutoClutch)));
 
                     if (Input.GetKeyDown(GearUpKey))
                     {
@@ -256,26 +287,36 @@ namespace SaccFlightAndVehicles
         }
         public void SetGear(int newgear)
         {
-            CurrentGear = Mathf.Clamp(newgear, 0, GearRatios.Length);
+            CurrentGear = (byte)Mathf.Clamp(newgear, 0, GearRatios.Length);
             LastGearChangeTime = Time.time;
             RequestSerialization();
         }
         public void SFEXT_O_PilotEnter()
         {
+            InVR = EntityControl.InVR;
             Piloting = true;
+            CurrentGear = NeutralGear;
             RequestSerialization();
+        }
+        public void SFEXT_P_PassengerEnter()
+        {
+            SGVControl.SetProgramVariable("Clutch", 0);// prevent passengers from seeing as if clutch is always pressed
         }
         public void SFEXT_O_PilotExit()
         {
             Piloting = false;
+            CurrentGear = NeutralGear;
             AutomaticReversing = false;
         }
+        bool Occupied;
         public void SFEXT_G_PilotEnter()
         {
+            Occupied = true;
             gameObject.SetActive(true);
         }
         public void SFEXT_G_PilotExit()
         {
+            Occupied = false;
             CurrentGear = NeutralGear;
             gameObject.SetActive(false);
         }

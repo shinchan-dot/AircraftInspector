@@ -1,13 +1,14 @@
 ﻿#if UNITY_EDITOR
-using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
-using UnityEditor;
+using UnityEngine.UI;
 using UnityEditor;
 using UdonSharpEditor;
 using UnityEngine.SceneManagement;
-using System.Collections.Generic;
 using VRC.SDKBase.Editor.BuildPipeline;
+using TMPro;
+using UdonSharp;
+using System.Reflection;
 
 namespace SaccFlightAndVehicles
 {
@@ -48,7 +49,7 @@ namespace SaccFlightAndVehicles
                     newcam.SetActive(false);
                     var cam = newcam.AddComponent<Camera>();
                     cam.nearClipPlane = .3f;
-                    cam.farClipPlane = 100000f;
+                    cam.farClipPlane = 50000f;
                     newcam.transform.parent = d.transform;
                     d.ReferenceCamera = newcam;
                     PrefabUtility.RecordPrefabInstancePropertyModifications(d);
@@ -109,17 +110,12 @@ namespace SaccFlightAndVehicles
         }
         public static void SetPlaneList_RadioBase()
         {
-            var SEs = GetAllSaccEntitys().ToArray();
             var RBs = GetAllSaccRadioBases().ToArray();
-            var SETransforms = new Transform[SEs.Length];
-            for (int i = 0; i < SEs.Length; i++)
-            {
-                SETransforms[i] = SEs[i].transform;
-            }
+            var Radios = GetAllSAVRadios().ToArray();
             var RZs = GetAllSaccRadioZones().ToArray();
             for (int i = 0; i < RBs.Length; i++)
             {
-                RBs[i].AllPlanes = SETransforms;
+                RBs[i].AllRadios_RD = Radios;
                 RBs[i].RadioZones = RZs;
                 PrefabUtility.RecordPrefabInstancePropertyModifications(RBs[i]);
                 EditorUtility.SetDirty(RBs[i]);
@@ -146,7 +142,6 @@ namespace SaccFlightAndVehicles
             var SEs = GetAllSaccEntitys().ToArray();
             foreach (var se in SEs)
             {
-                if (se.InVehicleOnly && se.InVehicleOnly.activeInHierarchy) { se.InVehicleOnly.SetActive(false); }
                 for (int i = 0; i < se.EnableInVehicle.Length; i++)
                 { if (se.EnableInVehicle[i]) se.EnableInVehicle[i].SetActive(false); }
                 PrefabUtility.RecordPrefabInstancePropertyModifications(se);
@@ -281,6 +276,16 @@ namespace SaccFlightAndVehicles
             foreach (GameObject g in SceneManager.GetActiveScene().GetRootGameObjects())
             {
                 var objs = g.GetComponentsInChildren<SaccVehicleEnterer>(true);
+                ls.AddRange(objs);
+            }
+            return ls;
+        }
+        static List<SAV_Radio> GetAllSAVRadios()
+        {
+            var ls = new List<SAV_Radio>();
+            foreach (GameObject g in SceneManager.GetActiveScene().GetRootGameObjects())
+            {
+                var objs = g.GetComponentsInChildren<SAV_Radio>(true);
                 ls.AddRange(objs);
             }
             return ls;
@@ -471,7 +476,7 @@ namespace SaccFlightAndVehicles
     }
     public class ColliderRenamer : EditorWindow
     {
-        [MenuItem("SaccFlight/Make All Static Colliders Tarmac...", false, 2)]
+        [MenuItem("SaccFlight/Make All Static Colliders Tarmac...", false, 4)]
         public static void ShowWindow()
         {
             EditorWindow.GetWindow(typeof(ColliderRenamer));
@@ -555,6 +560,219 @@ namespace SaccFlightAndVehicles
                 foreach (Transform t in tr) GetAllSceneCameraPositions(CamSuffix, t, ls);
             }
             return ls;
+        }
+    }
+    public class CreateStickDisplay : EditorWindow
+    {
+        [MenuItem("SaccFlight/Create Stick Displays (Selected)", false, 2)]
+        static void CreateDisplays()
+        {
+            GameObject ui_canvas = null;
+            ui_canvas = SetupDisplay(false, ui_canvas);
+            SetupDisplay(true, ui_canvas);
+            if (ui_canvas)
+            { Selection.activeObject = ui_canvas; }
+        }
+        static GameObject SetupDisplay(bool isR, GameObject ui_canvas)
+        {
+            Transform selectedTransform = (Selection.activeObject as GameObject).transform;
+            SaccEntity SE = null;
+            SAV_PassengerFunctionsController PEVC = null;
+            Transform checkTrans = selectedTransform.transform;
+            while (SE == null && PEVC == null && checkTrans != null)
+            {
+                SE = checkTrans.GetComponent<SaccEntity>();
+                PEVC = checkTrans.GetComponent<SAV_PassengerFunctionsController>();
+                checkTrans = checkTrans.parent;
+            }
+            if (SE == null && PEVC == null)
+            {
+                Debug.LogError("Failed to Find SaccEntity or PassengerFunctions");
+                return null;
+            }
+            if (SE)
+            {
+                if (isR)
+                {
+                    if (SE.Dial_Functions_R.Length == 0) { Debug.LogWarning("No functions in list"); return null; }
+                    return CreateDisplay(SE.Dial_Functions_R, SE.RightDialDivideStraightUp, isR, SE.transform, ui_canvas);
+                }
+                else
+                {
+                    if (SE.Dial_Functions_L.Length == 0) { Debug.LogWarning("No functions in list"); return null; }
+                    return CreateDisplay(SE.Dial_Functions_L, SE.LeftDialDivideStraightUp, isR, SE.transform, ui_canvas);
+                }
+            }
+            else
+            {
+                if (isR)
+                {
+                    if (PEVC.Dial_Functions_R.Length == 0) { Debug.LogWarning("No functions in list"); return null; }
+                    return CreateDisplay(PEVC.Dial_Functions_R, PEVC.RightDialDivideStraightUp, isR, PEVC.transform, ui_canvas);
+                }
+                else
+                {
+                    if (PEVC.Dial_Functions_L.Length == 0) { Debug.LogWarning("No functions in list"); return null; }
+                    return CreateDisplay(PEVC.Dial_Functions_L, PEVC.LeftDialDivideStraightUp, isR, PEVC.transform, ui_canvas);
+                }
+            }
+        }
+        static GameObject CreateDisplay(UdonSharpBehaviour[] Funcs, bool DivideStraightUp, bool isR, Transform Vehicle, GameObject ui_canvas)
+        {
+            string MFDMeshID = "a753c14a91335054282f470f1c93f533"; //MFD.fbx
+            GameObject MFDMesh = AssetDatabase.LoadAssetAtPath<GameObject>(AssetDatabase.GUIDToAssetPath(MFDMeshID));
+            // Check if the object has been loaded successfully
+            if (!MFDMesh)
+            {
+                Debug.LogError("MFD Mesh not found");
+                return null;
+            }
+            Transform selectedTransform = (Selection.activeObject as GameObject).transform;
+            int numDFUNCsL = Funcs.Length;
+            string meshNameDivider = "StickDisplay";
+            string meshNameHighlighter = "StickDisplayHighlighter";
+            string meshNameFuncon = "MFD_display_funcon";
+            if (numDFUNCsL != 8) // 8 is special case (old default)
+            {
+                meshNameDivider += numDFUNCsL.ToString();
+            }
+
+            Transform parentOfSelected = selectedTransform.parent;
+
+            MeshFilter[] filters = MFDMesh.GetComponentsInChildren<MeshFilter>();
+
+            // Get the material from the asset database by its ID
+            string materialID = "7181dec3c88033948a9d183e29921d60";
+            Material mat_MFD = AssetDatabase.LoadAssetAtPath<Material>(AssetDatabase.GUIDToAssetPath(materialID));
+            materialID = "926bfdc1b229b1e488e1b45dd5701356";
+            Material mat_MFD_funcon = AssetDatabase.LoadAssetAtPath<Material>(AssetDatabase.GUIDToAssetPath(materialID));
+            materialID = "80242fa653591a446aec58ab8512bf04";
+            Material mat_MFD_Smoke_funcon = AssetDatabase.LoadAssetAtPath<Material>(AssetDatabase.GUIDToAssetPath(materialID));
+            if (!ui_canvas)
+            {
+                ui_canvas = new GameObject("StickDisplayCanvas");
+                ui_canvas.layer = 31;
+                // Add a RectTransform to the canvas
+                RectTransform rectTransform = ui_canvas.AddComponent<RectTransform>();
+                rectTransform.anchoredPosition3D = Vector3.zero;
+                rectTransform.sizeDelta = new Vector2(.1f, .1f);
+                rectTransform.pivot = new Vector2(.5f, .5f);
+                CanvasScaler canvasScaler = ui_canvas.AddComponent<CanvasScaler>();
+                canvasScaler.uiScaleMode = CanvasScaler.ScaleMode.ScaleWithScreenSize;
+                ui_canvas.transform.parent = parentOfSelected;
+                ui_canvas.transform.position = Vehicle.position;
+                ui_canvas.transform.rotation = Vehicle.rotation * ui_canvas.transform.rotation;
+            }
+            Undo.RegisterCreatedObjectUndo(ui_canvas, "Create Stick Displays");
+            // Add a CanvasScaler to the world space canvas
+            string ObjectName = "StickDisplay" + (isR ? "R" : "L");
+            GameObject StickDisplay = new GameObject(ObjectName);
+            StickDisplay.layer = 31;
+            GameObject DisplayHighlighter = new GameObject((isR ? "R" : "L") + "StickDisplayHighlighter");
+            DisplayHighlighter.layer = 31;
+            GameObject DisplayFuncon = new GameObject("StickFuncon");
+            DisplayFuncon.layer = 31;
+
+            List<int> HasFuncon = new List<int>(); // tracks if we need to add a Funcon to objects later
+            List<string> HasFuncon_name = new List<string>();
+            List<bool> HasFuncon_isSmoke = new List<bool>();
+
+            foreach (var filter in filters)
+            {
+                if (filter.sharedMesh.name == meshNameDivider)
+                {
+                    // Assign the mesh to a new MeshFilter component
+                    StickDisplay.AddComponent<MeshFilter>().mesh = filter.sharedMesh;
+                    StickDisplay.AddComponent<MeshRenderer>().material = mat_MFD;
+
+
+
+                    if (DivideStraightUp)
+                    {
+                        float rot = (360f / Funcs.Length) * -.5f;
+                        StickDisplay.transform.rotation = StickDisplay.transform.rotation * Quaternion.AngleAxis(rot, StickDisplay.transform.forward);
+                    }
+
+                    for (int i = 0; i < Funcs.Length; i++)
+                    {
+                        if (!Funcs[i]) { continue; }
+                        GameObject TextObj = new GameObject("TextObj");
+                        TextObj.layer = 31;
+                        TextObj.transform.parent = StickDisplay.transform;
+                        // Add a TextMeshPro text object
+                        TextMeshProUGUI tmpText = TextObj.AddComponent<TextMeshProUGUI>();
+                        string funcName = Funcs[i].GetUdonTypeName();
+                        string[] funcNameSplit = funcName.Split("_");
+                        string funcName_Clean = string.Empty;
+                        if (funcNameSplit.Length > 1)
+                        {
+                            for (int o = 1; o < funcNameSplit.Length; o++)
+                            {
+                                funcName_Clean += funcNameSplit[o];
+                            }
+                        }
+                        else { funcName_Clean = funcName; }
+                        string funcName_Dial = funcName_Clean.ToUpper();
+                        tmpText.rectTransform.sizeDelta = new Vector2(.18f, .14f);
+                        tmpText.text = funcName_Dial;
+                        tmpText.fontSize = .022f;
+                        tmpText.alignment = TextAlignmentOptions.Center;
+
+                        string fontID = "76f1914f4f82852458d2250d86c7f472"; //F1.8-RegularSDF
+                        TMP_FontAsset theFont = AssetDatabase.LoadAssetAtPath<TMP_FontAsset>(AssetDatabase.GUIDToAssetPath(fontID));
+                        tmpText.font = theFont;
+                        tmpText.color = new Color32(170, 255, 0, 255);
+
+                        Vector3 pos = tmpText.rectTransform.localPosition;
+                        pos.y = 0.14f; ;
+                        float rot = (360f / Funcs.Length) * i;
+                        pos = Quaternion.AngleAxis(rot, -StickDisplay.transform.forward) * pos;
+
+                        tmpText.rectTransform.localPosition = pos;
+                        tmpText.rectTransform.rotation = Quaternion.identity;
+                        TextObj.name = "MFD_" + funcName_Clean;
+
+                        // save whether or not we need to add a Funcon for later
+                        if (Funcs[i].GetType().GetField("Dial_Funcon", BindingFlags.Public | BindingFlags.Instance) != null)
+                        {
+                            HasFuncon.Add(i);
+                            HasFuncon_name.Add("MFD_" + funcName_Clean);
+                            HasFuncon_isSmoke.Add(funcName == "DFUNC_Smoke");
+                        }
+                    }
+                }
+                else if (filter.sharedMesh.name == meshNameHighlighter)
+                {
+                    DisplayHighlighter.AddComponent<MeshFilter>().mesh = filter.sharedMesh;
+                    DisplayHighlighter.AddComponent<MeshRenderer>().material = mat_MFD;
+                }
+                else if (filter.sharedMesh.name == meshNameFuncon)
+                {
+                    DisplayFuncon.AddComponent<MeshFilter>().mesh = filter.sharedMesh;
+                    DisplayFuncon.AddComponent<MeshRenderer>().material = mat_MFD_funcon;
+                }
+
+                DisplayHighlighter.transform.parent = StickDisplay.transform;
+            }
+
+            // Add funcon indicators for funtions that use them
+            for (int i = 0; i < HasFuncon.Count; i++)
+            {
+                GameObject newFuncon = Instantiate(DisplayFuncon);
+                newFuncon.layer = 31;
+                newFuncon.transform.parent = StickDisplay.transform;
+                newFuncon.name = HasFuncon_name[i] + "_FUNCON";
+                float rot = (360f / Funcs.Length) * HasFuncon[i];
+                newFuncon.transform.localRotation = Quaternion.AngleAxis(rot, -StickDisplay.transform.forward);
+                if (HasFuncon_isSmoke[i]) { newFuncon.GetComponent<MeshRenderer>().material = mat_MFD_Smoke_funcon; }
+            }
+
+            DestroyImmediate(DisplayFuncon);
+            StickDisplay.transform.position += Vector3.right * (isR ? 0.5f : -0.5f);
+            StickDisplay.transform.SetParent(ui_canvas.transform);
+            StickDisplay.transform.localPosition = StickDisplay.transform.position;
+            StickDisplay.transform.localRotation = StickDisplay.transform.rotation;
+            return ui_canvas;
         }
     }
 }

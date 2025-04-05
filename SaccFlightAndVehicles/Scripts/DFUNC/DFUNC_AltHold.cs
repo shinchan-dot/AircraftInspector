@@ -19,6 +19,7 @@ namespace SaccFlightAndVehicles
         public float AltHoldPitchProportional = 1f;
         public float AltHoldPitchIntegral = 1f;
         private float AltHoldPitchIntegrator;
+        [Tooltip("Derivative has some jitter because of the inaccuracy of Vector3.SignedAngle on very low angles")]
         public float AltHoldPitchDerivative = .1f;
         private float AltHoldPitchlastframeerror;
         public float AltHoldRollProportional = .01f;
@@ -31,14 +32,13 @@ namespace SaccFlightAndVehicles
         public bool HelicopterMode;
         public float CruiseProportional = .1f;
         public float CruiseIntegral = .1f;
-        private float CruiseIntegrator;
-        private float CruiseIntegratorMax = 5;
-        private float CruiseIntegratorMin = -5;
+        public float CruiseIntegratorMax = 5;
+        public float CruiseIntegratorMin = -5;
         public float CruiseDerivative = .6f;
         private float SetSpeed;
         private bool Cruise;
         private bool CruiseThrottleOverridden;
-        private float Cruiselastframeerror;
+        private float cruiseLastFrameError;
         public float AutoHoverStrengthPitch = 5f;
         public float AutoHoverMaxPitch = 10f;
         public float AutoHoverStrengthRoll = 5f;
@@ -47,12 +47,15 @@ namespace SaccFlightAndVehicles
         public float AutoHoverMaxAngleSpeedPitch = 20f;
         [Tooltip("Speed at which the auto hover Angle stops increasing, lateral = yaw")]
         public float AutoHoverMaxAngleSpeedRoll = 20f;
-        private SaccEntity EntityControl;
-        private bool UseLeftTrigger = false;
+        [Header("Debug:")]
+        public float CruiseIntegrator;
+        [System.NonSerializedAttribute] public bool LeftDial = false;
+        [System.NonSerializedAttribute] public int DialPosition = -999;
+        [System.NonSerializedAttribute] public SaccEntity EntityControl;
+        [System.NonSerializedAttribute] public SAV_PassengerFunctionsController PassengerFunctionsControl;
         private bool TriggerLastFrame;
         [System.NonSerializedAttribute] public bool AltHold;
         private Rigidbody VehicleRigidbody;
-        private Transform VehicleTransform;
         private Vector3 RotationInputs;
         private bool EngineOn;
         private bool IsOwner;
@@ -61,18 +64,13 @@ namespace SaccFlightAndVehicles
         private bool JoyStickOveridden;
         private bool StickHeld;
         private bool Piloting;
-        public void DFUNC_LeftDial() { UseLeftTrigger = true; }
-        public void DFUNC_RightDial() { UseLeftTrigger = false; }
         public void SFEXT_L_EntityStart()
         {
             VRCPlayerApi localPlayer = Networking.LocalPlayer;
-            if (localPlayer != null)
-            { InVR = localPlayer.IsUserInVR(); }
-            EntityControl = (SaccEntity)SAVControl.GetProgramVariable("EntityControl");
+            InVR = EntityControl.InVR;
             VehicleRigidbody = (Rigidbody)SAVControl.GetProgramVariable("VehicleRigidbody");
-            VehicleTransform = EntityControl.transform;
             if (Dial_Funcon) { Dial_Funcon.SetActive(false); }
-            IsOwner = (bool)SAVControl.GetProgramVariable("IsOwner");
+            IsOwner = EntityControl.IsOwner;
         }
         public void DFUNC_Selected()
         {
@@ -88,6 +86,7 @@ namespace SaccFlightAndVehicles
         public void SFEXT_O_PilotEnter()
         {
             Piloting = true;
+            InVR = EntityControl.InVR;
             if (!AltHold) { gameObject.SetActive(false); }
             if (Dial_Funcon) Dial_Funcon.SetActive(AltHold);
         }
@@ -184,14 +183,14 @@ namespace SaccFlightAndVehicles
             if (HelicopterMode)
             { SetCruiseOff(); }
         }
-        private void FixedUpdate()
+        private void Update()
         {
             if (Selected)
             {
                 if (InVR)
                 {
                     float Trigger;
-                    if (UseLeftTrigger)
+                    if (LeftDial)
                     { Trigger = Input.GetAxisRaw("Oculus_CrossPlatform_PrimaryIndexTrigger"); }
                     else
                     { Trigger = Input.GetAxisRaw("Oculus_CrossPlatform_SecondaryIndexTrigger"); }
@@ -207,24 +206,27 @@ namespace SaccFlightAndVehicles
                     else { TriggerLastFrame = false; }
                 }
             }
-
+        }
+        void FixedUpdate()
+        {
             if (AltHold && IsOwner)
             {
-                float DeltaTime = Time.deltaTime;
-                Vector3 localAngularVelocity = VehicleTransform.InverseTransformDirection(VehicleRigidbody.angularVelocity);
-                Vector3 localVelocity = VehicleTransform.InverseTransformDirection(VehicleRigidbody.velocity);
+                float DeltaTime = Time.fixedDeltaTime;
+                Vector3 localAngularVelocity = Quaternion.Inverse(VehicleRigidbody.rotation) * VehicleRigidbody.angularVelocity;
+                Vector3 localVelocity = Quaternion.Inverse(VehicleRigidbody.rotation) * VehicleRigidbody.velocity;
                 //Altitude hold PID Controller
 
-                int upsidedown = Vector3.Dot(Vector3.up, VehicleTransform.up) > 0 ? 1 : -1;
+                int upsidedown = Vector3.Dot(Vector3.up, VehicleRigidbody.rotation * Vector3.up) > 0 ? 1 : -1;
                 float error;
                 if (HelicopterMode)
                 {
                     float MovementErrorz = Mathf.Clamp(Mathf.Clamp(localVelocity.z * AutoHoverStrengthPitch, -AutoHoverMaxAngleSpeedPitch, AutoHoverMaxAngleSpeedPitch), -AutoHoverMaxPitch, AutoHoverMaxPitch);
-                    error = Vector3.SignedAngle(VehicleTransform.forward, Vector3.ProjectOnPlane(VehicleTransform.forward, Vector3.up), VehicleTransform.right) - MovementErrorz;
+                    //Vector3.SignedAngle's minimum angle measurement seems to be 0.01978234 degrees, i believe is the source of the jitter when using derivative AltHoldPitchDerivative > 0
+                    error = Vector3.SignedAngle(VehicleRigidbody.rotation * Vector3.forward, Vector3.ProjectOnPlane(VehicleRigidbody.rotation * Vector3.forward, Vector3.up), VehicleRigidbody.rotation * Vector3.right) - MovementErrorz;
                 }
                 else
                 {
-                    error = ((Vector3)SAVControl.GetProgramVariable("CurrentVel")).normalized.y - (localAngularVelocity.x * upsidedown * 2.5f);
+                    error = VehicleRigidbody.velocity.normalized.y - (localAngularVelocity.x * upsidedown * 2.5f);
                 }
 
                 AltHoldPitchIntegrator += error * DeltaTime;
@@ -233,27 +235,30 @@ namespace SaccFlightAndVehicles
                 AltHoldPitchlastframeerror = error;
                 RotationInputs.x = AltHoldPitchProportional * error;
                 RotationInputs.x += AltHoldPitchIntegral * AltHoldPitchIntegrator;
-                RotationInputs.x += AltHoldPitchDerivative * AltHoldPitchDerivator; //works but spazzes out real bad
+                RotationInputs.x += AltHoldPitchDerivative * AltHoldPitchDerivator;
                 RotationInputs.x = Mathf.Clamp(RotationInputs.x, -1, 1);
 
                 //Roll
-                float errorRoll = VehicleTransform.localEulerAngles.z;
+                float errorRoll = VehicleRigidbody.rotation.eulerAngles.z;
                 if (errorRoll > 180) { errorRoll -= 360; }
 
-                //lock upside down if rotated more than 90
-                if (errorRoll > 90)
-                {
-                    errorRoll -= 180;
-                    RotationInputs.x *= -1;
-                }
-                else if (errorRoll < -90)
-                {
-                    errorRoll += 180;
-                    RotationInputs.x *= -1;
-                }
                 if (HelicopterMode)
                 {
                     errorRoll -= Mathf.Clamp(Mathf.Clamp(localVelocity.x, -AutoHoverMaxAngleSpeedRoll, AutoHoverMaxAngleSpeedRoll) * AutoHoverStrengthRoll, -AutoHoverMaxRoll, AutoHoverMaxRoll);
+                }
+                else
+                {
+                    //lock upside down if rotated more than 90
+                    if (errorRoll > 90)
+                    {
+                        errorRoll -= 180;
+                        RotationInputs.x *= -1;
+                    }
+                    else if (errorRoll < -90)
+                    {
+                        errorRoll += 180;
+                        RotationInputs.x *= -1;
+                    }
                 }
                 errorRoll = -errorRoll;
                 float AltHoldRollDerivator = (errorRoll - AltHoldRolllastframeerror) / DeltaTime;
@@ -306,14 +311,14 @@ namespace SaccFlightAndVehicles
                         }
                         SetSpeed = 0;
 
-                        float errorT = (SetSpeed - ((Vector3)SAVControl.GetProgramVariable("CurrentVel")).y);
+                        float errorCruise = SetSpeed - VehicleRigidbody.velocity.y;
 
-                        CruiseIntegrator += errorT * DeltaTime;
+                        CruiseIntegrator += errorCruise * DeltaTime;
                         CruiseIntegrator = Mathf.Clamp(CruiseIntegrator, CruiseIntegratorMin, CruiseIntegratorMax);
 
-                        float Derivator =/*  Mathf.Clamp(( */(errorT - Cruiselastframeerror) / DeltaTime/*) , DerivMin, DerivMax) */;
-                        Cruiselastframeerror = errorT;
-                        SAVControl.SetProgramVariable("ThrottleOverride", Mathf.Clamp((CruiseProportional * errorT) + (CruiseIntegral * CruiseIntegrator) + (CruiseDerivative * Derivator), 0, 1));
+                        float Derivator =/*  Mathf.Clamp(( */(errorCruise - cruiseLastFrameError) / DeltaTime/*) , DerivMin, DerivMax) */;
+                        cruiseLastFrameError = errorCruise;
+                        SAVControl.SetProgramVariable("ThrottleOverride", Mathf.Clamp((CruiseProportional * errorCruise) + (CruiseIntegral * CruiseIntegrator) + (CruiseDerivative * Derivator), 0, 1));
                     }
                 }
             }

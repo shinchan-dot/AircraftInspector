@@ -14,8 +14,12 @@ namespace SaccFlightAndVehicles
         [Tooltip("Object enabled when function is active (used on MFD)")]
         public GameObject Dial_Funcon;
         public Animator CanopyAnimator;
+        [Tooltip("How long to wait before telling the sound controller to change the sounds to outside vehicle sounds when opening")]
+        public float CanopyOpenTime = 0f;
         [Tooltip("The length of the canopy close animation, or how long to wait before telling the sound controller to change the sounds to inside vehicle sounds when closing")]
         public float CanopyCloseTime = 1.8f;
+        [Tooltip("Seats whos sound to change when opening canopy. Leave empty to effect all seats")]
+        public SaccVehicleSeat[] EffectedSeats;
         [Tooltip("The canopy can break off? Requires animation setup")]
         public bool CanopyCanBreakOff = false;
         [Header("Meters/s")]
@@ -30,8 +34,10 @@ namespace SaccFlightAndVehicles
         [Tooltip("Name of animator boolean that is true when canopy is broken")]
         public string AnimCanopyBroken = "canopybroken";
         public bool DoCanopyOpenDrag = true;
-        private SaccEntity EntityControl;
-        private bool UseLeftTrigger = false;
+        [System.NonSerializedAttribute] public bool LeftDial = false;
+        [System.NonSerializedAttribute] public int DialPosition = -999;
+        [System.NonSerializedAttribute] public SaccEntity EntityControl;
+        [System.NonSerializedAttribute] public SAV_PassengerFunctionsController PassengerFunctionsControl;
         private bool TriggerLastFrame;
         private Transform VehicleTransform;
         private VRCPlayerApi localPlayer;
@@ -44,13 +50,10 @@ namespace SaccFlightAndVehicles
         private bool DragApplied;
         private bool CanopyTransitioning = false;
         private bool InEditor = true;
-        public void DFUNC_LeftDial() { UseLeftTrigger = true; }
-        public void DFUNC_RightDial() { UseLeftTrigger = false; }
         public void SFEXT_L_EntityStart()
         {
             localPlayer = Networking.LocalPlayer;
             InEditor = localPlayer == null;
-            EntityControl = (SaccEntity)SAVControl.GetProgramVariable("EntityControl");
             VehicleTransform = EntityControl.transform;
             CanopyDragMulti -= 1;
             //crashes if not sent delayed because the order of events sent by SendCustomEvent are not maintained, (SaccEntity.SendEventToExtensions())
@@ -69,7 +72,7 @@ namespace SaccFlightAndVehicles
         {
             gameObject.SetActive(true);
             if (Dial_Funcon) { Dial_Funcon.SetActive(CanopyOpen); }
-            if (!InEditor) { InVR = localPlayer.IsUserInVR(); }
+            InVR = EntityControl.InVR;
         }
         public void SFEXT_O_PilotExit()
         {
@@ -92,10 +95,6 @@ namespace SaccFlightAndVehicles
             else if (!CanopyOpen)
             { SendCustomNetworkEvent(VRC.Udon.Common.Interfaces.NetworkEventTarget.All, nameof(CanopyClosing)); }
         }
-        public void SFEXT_O_RespawnButton()
-        {
-            CanopyOpening();
-        }
         public void SFEXT_G_RespawnButton()
         {
             CanopyBroken = false;
@@ -112,11 +111,12 @@ namespace SaccFlightAndVehicles
                 }
             }
         }
+        public void SFEXT_G_RePair() { SFEXT_G_ReSupply(); }
         public void RepairCanopy()
         {
             CanopyBroken = false;
             CanopyAnimator.SetBool(AnimCanopyBroken, false);
-            if ((bool)SAVControl.GetProgramVariable("IsOwner")) { SendCustomEventDelayedFrames(nameof(SendCanopyRepair), 1); }
+            if (EntityControl.IsOwner) { SendCustomEventDelayedFrames(nameof(SendCanopyRepair), 1); }
             if (CanopyOpen) { CanopyClosing(); }
         }
         private void Update()
@@ -124,7 +124,7 @@ namespace SaccFlightAndVehicles
             if (Selected)
             {
                 float Trigger;
-                if (UseLeftTrigger)
+                if (LeftDial)
                 { Trigger = Input.GetAxisRaw("Oculus_CrossPlatform_PrimaryIndexTrigger"); }
                 else
                 { Trigger = Input.GetAxisRaw("Oculus_CrossPlatform_SecondaryIndexTrigger"); }
@@ -162,8 +162,7 @@ namespace SaccFlightAndVehicles
             if (Dial_Funcon) { Dial_Funcon.SetActive(true); }
             CanopyOpen = true;
             CanopyAnimator.SetBool(AnimCanopyBool, true);
-            SoundControl.SendCustomEvent("DoorOpen");
-            if ((bool)SAVControl.GetProgramVariable("IsOwner"))
+            if (EntityControl.IsOwner)
             {
                 SendCustomEventDelayedFrames(nameof(SendCanopyOpened), 1);
             }
@@ -173,6 +172,22 @@ namespace SaccFlightAndVehicles
                 SAVControl.SetProgramVariable("ExtraDrag", (float)SAVControl.GetProgramVariable("ExtraDrag") + CanopyDragMulti);
                 DragApplied = true;
             }
+
+            if (EffectedSeats.Length == 0)
+            {
+                for (int i = 0; i < EntityControl.VehicleSeats.Length; i++)
+                {
+                    EntityControl.VehicleSeats[i].SetProgramVariable("numOpenDoors", (int)EntityControl.VehicleSeats[i].GetProgramVariable("numOpenDoors") + 1);
+                }
+            }
+            else
+            {
+                for (int i = 0; i < EffectedSeats.Length; i++)
+                {
+                    EffectedSeats[i].SetProgramVariable("numOpenDoors", (int)EffectedSeats[i].GetProgramVariable("numOpenDoors") + 1);
+                }
+            }
+            SoundControl.SendCustomEventDelayedSeconds("UpdateDoorsOpen", CanopyOpenTime);
         }
         public void CanopyClosing()
         {
@@ -184,7 +199,7 @@ namespace SaccFlightAndVehicles
             CanopyTransitioning = true;
             SoundControl.SendCustomEventDelayedSeconds("DoorClose", CanopyCloseTime);
             SendCustomEventDelayedSeconds("SetCanopyTransitioningFalse", CanopyCloseTime);
-            if ((bool)SAVControl.GetProgramVariable("IsOwner"))
+            if (EntityControl.IsOwner)
             {
                 SendCustomEventDelayedFrames(nameof(SendCanopyClosed), 1);
             }
@@ -193,6 +208,21 @@ namespace SaccFlightAndVehicles
                 SAVControl.SetProgramVariable("ExtraDrag", (float)SAVControl.GetProgramVariable("ExtraDrag") - CanopyDragMulti);
                 DragApplied = false;
             }
+            if (EffectedSeats.Length == 0)
+            {
+                for (int i = 0; i < EntityControl.VehicleSeats.Length; i++)
+                {
+                    EntityControl.VehicleSeats[i].SetProgramVariable("numOpenDoors", (int)EntityControl.VehicleSeats[i].GetProgramVariable("numOpenDoors") - 1);
+                }
+            }
+            else
+            {
+                for (int i = 0; i < EffectedSeats.Length; i++)
+                {
+                    EffectedSeats[i].SetProgramVariable("numOpenDoors", (int)EffectedSeats[i].GetProgramVariable("numOpenDoors") - 1);
+                }
+            }
+            SoundControl.SendCustomEventDelayedSeconds("UpdateDoorsOpen", CanopyCloseTime);
         }
         //these events have to be used with a frame delay because if you call them from an event that was called by the same SendEventToExtensions function, the previous call stops.
         public void SendCanopyClosed()
@@ -218,11 +248,11 @@ namespace SaccFlightAndVehicles
         public void CanopyBreakOff()
         {
             if (CanopyBroken) { return; }
-            Dial_Funcon.SetActive(true);
+            if (Dial_Funcon) Dial_Funcon.SetActive(true);
             CanopyOpen = true;
             CanopyBroken = true;
             CanopyAnimator.SetBool(AnimCanopyBroken, true);
-            if ((bool)SAVControl.GetProgramVariable("IsOwner"))
+            if (EntityControl.IsOwner)
             {
                 SendCustomEventDelayedFrames(nameof(SendCanopyBreak), 1);
             }

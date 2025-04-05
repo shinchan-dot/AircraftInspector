@@ -19,25 +19,26 @@ namespace SaccFlightAndVehicles
         [Header("Only required if above is ticked")]
         public Animator EngineAnimator;
         public string AnimEngineStartupAnimBool = "EngineStarting";
-        private SaccEntity EntityControl;
+        [System.NonSerializedAttribute] public bool LeftDial = false;
+        [System.NonSerializedAttribute] public int DialPosition = -999;
+        [System.NonSerializedAttribute] public SaccEntity EntityControl;
+        [System.NonSerializedAttribute] public SAV_PassengerFunctionsController PassengerFunctionsControl;
         private bool NoFuel;
+        private bool wrecked;
         private int EngineStartCount;
         private int EngineStartCancelCount;
-        private bool UseLeftTrigger = false;
         private bool TriggerLastFrame;
         private float ToggleTime;
         private float TriggerTapTime;
-        public void DFUNC_LeftDial() { UseLeftTrigger = true; }
-        public void DFUNC_RightDial() { UseLeftTrigger = false; }
         public void SFEXT_L_EntityStart()
         {
-            EntityControl = (SaccEntity)SAVControl.GetProgramVariable("EntityControl");
+            wrecked = EntityControl.wrecked;
             if (Dial_Funcon) { Dial_Funcon.SetActive(false); }
         }
         private void Update()
         {
             float Trigger;
-            if (UseLeftTrigger)
+            if (LeftDial)
             { Trigger = Input.GetAxisRaw("Oculus_CrossPlatform_PrimaryIndexTrigger"); }
             else
             { Trigger = Input.GetAxisRaw("Oculus_CrossPlatform_SecondaryIndexTrigger"); }
@@ -77,7 +78,7 @@ namespace SaccFlightAndVehicles
                 }
                 else
                 {
-                    if (!NoFuel)
+                    if (!NoFuel && !wrecked)
                     {
                         if (StartUpTime == 0)
                         { SendCustomNetworkEvent(VRC.Udon.Common.Interfaces.NetworkEventTarget.All, nameof(EngineOn)); }
@@ -108,7 +109,7 @@ namespace SaccFlightAndVehicles
             if (EngineStartCount > 0) { EngineStartCount--; }
             if (EntityControl.IsOwner)
             {
-                if (!NoFuel)
+                if (!NoFuel && !wrecked)
                 {
                     if (EngineStartCount == 0 && EngineStartCancelCount == 0)
                     {
@@ -182,6 +183,14 @@ namespace SaccFlightAndVehicles
             if (Dial_Funcon) { Dial_Funcon.SetActive(true); }
             if (DoEngineStartupAnimBool)
             { EngineAnimator.SetBool(AnimEngineStartupAnimBool, true); }
+        }
+        public void SFEXT_G_Wrecked()
+        {
+            wrecked = true;
+        }
+        public void SFEXT_G_NotWrecked()
+        {
+            wrecked = false;
         }
         public void SFEXT_G_NoFuel()
         { NoFuel = true; }

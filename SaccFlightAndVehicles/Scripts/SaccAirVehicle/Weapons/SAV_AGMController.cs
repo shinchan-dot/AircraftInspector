@@ -10,6 +10,7 @@ namespace SaccFlightAndVehicles
     public class SAV_AGMController : UdonSharpBehaviour
     {
         public UdonSharpBehaviour AGMLauncherControl;
+        UdonSharpBehaviour SAVControl;
         [Tooltip("Missile will explode after this time")]
         public float MaxLifetime = 35;
         [Tooltip("How long to wait to destroy the gameobject after it has exploded, (explosion sound/animation must finish playing)")]
@@ -35,65 +36,82 @@ namespace SaccFlightAndVehicles
         public Vector3 ThrowVelocity = new Vector3(0, 0, 0);
         [Tooltip("Enable this tickbox to make the ThrowVelocity vector local to the vehicle instead of the missile")]
         public bool ThrowSpaceVehicle = false;
+        [Tooltip("For colliders using the armor system (Tanks), final damage = base damage * 2^(ArmorPenetrationLevel - ColliderArmorLevel)")]
+        [Range(0, 14)]
+        public int ArmorPenetrationLevel = 5;
+        [Header("Knockback")]
+        [SerializeField] float KnockbackRadius = 0;
+        [SerializeField] bool KnobckbackModeAcceleration = false;
+        [SerializeField] float KnockbackStrength_rigidbody = 150f;
+        [SerializeField] float KnockbackStrength_players = 1.5f;
         private Animator MissileAnimator;
-        private SaccEntity EntityControl;
+        [System.NonSerialized] public SaccEntity EntityControl;
         private bool StartTrack = false;
-        private Transform VehicleCenterOfMass;
         private Transform TargetTransform;
         private Vector3 TargetOffset;
         private bool ColliderActive = false;
         [System.NonSerializedAttribute] public bool Exploding = false;
         private bool IsOwner = false;
-        private CapsuleCollider AGMCollider;
+        private Collider AGMCollider;
         private Rigidbody AGMRigid;
-        private ConstantForce MissileConstant;
+        private Rigidbody VehicleRigid;
         private bool hitwater;
         private bool initialized;
         private int LifeTimeExplodesSent;
+        private bool ColliderAlwaysActive;
+        Vector3 LocalLaunchPoint;
         private void Initialize()
         {
             initialized = true;
             EntityControl = (SaccEntity)AGMLauncherControl.GetProgramVariable("EntityControl");
-            VehicleCenterOfMass = EntityControl.CenterOfMass;
-            AGMCollider = gameObject.GetComponent<CapsuleCollider>();
+            SAVControl = (UdonSharpBehaviour)AGMLauncherControl.GetProgramVariable("SAVControl");
+            AGMCollider = gameObject.GetComponent<Collider>();
             AGMRigid = gameObject.GetComponent<Rigidbody>();
-            MissileConstant = GetComponent<ConstantForce>();
+            VehicleRigid = EntityControl.VehicleRigidbody;
             MissileAnimator = gameObject.GetComponent<Animator>();
+            ColliderAlwaysActive = ColliderActiveDistance == 0;
         }
-        public void ThrowMissile()
-        {
-            AGMRigid.velocity += (ThrowSpaceVehicle ? EntityControl.transform.TransformDirection(ThrowVelocity) : transform.TransformDirection(ThrowVelocity));
-        }
-        private void OnEnable()
+        public void EnableWeapon()
         {
             if (!initialized) { Initialize(); }
+            if (EntityControl.InEditor) { IsOwner = true; }
+            else { IsOwner = (bool)AGMLauncherControl.GetProgramVariable("IsOwner"); }
+            if (ColliderAlwaysActive) { AGMCollider.enabled = true; ColliderActive = true; }
+            else { AGMCollider.enabled = false; ColliderActive = false; }
+            LocalLaunchPoint = EntityControl.transform.InverseTransformDirection(transform.position - EntityControl.transform.position);
+            AGMRigid.velocity += ThrowSpaceVehicle ? EntityControl.transform.TransformDirection(ThrowVelocity) : transform.TransformDirection(ThrowVelocity);
             TargetTransform = (Transform)AGMLauncherControl.GetProgramVariable("TrackedTransform");
             TargetOffset = (Vector3)AGMLauncherControl.GetProgramVariable("TrackedObjectOffset");
-            if (EntityControl.InEditor) { IsOwner = true; }
-            else
-            { IsOwner = (bool)AGMLauncherControl.GetProgramVariable("IsOwner"); }
             SendCustomEventDelayedSeconds(nameof(LifeTimeExplode), MaxLifetime);
             LifeTimeExplodesSent++;
             SendCustomEventDelayedSeconds(nameof(StartTracking), FlyStraightTime);
-            SendCustomEventDelayedFrames(nameof(ThrowMissile), 1);//doesn't work if done this frame
 
-            //LateUpdate runs one time after MoveBackToPool so these must be here
-            ColliderActive = false;
-            MissileConstant.relativeTorque = Vector3.zero;
-            MissileConstant.relativeForce = Vector3.zero;
+            if (ColliderAlwaysActive && !EntityControl.IsOwner && AGMRigid && !AGMRigid.isKinematic && SAVControl)
+            {
+                // because non-owners update position of vehicle in Update() via SyncScript, it can clip into the projectile before next physics update
+                // So in the updates until then move projectile by vehiclespeed
+                ensureNoSelfCollision_time = Time.fixedTime;
+                ensureNoSelfCollision();
+            }
+        }
+        float ensureNoSelfCollision_time;
+        public void ensureNoSelfCollision()
+        {
+            if (ensureNoSelfCollision_time != Time.fixedTime) return;
+
+            transform.position += (Vector3)SAVControl.GetProgramVariable("CurrentVel") * Time.deltaTime;
+            AGMRigid.position = transform.position;
+            SendCustomEventDelayedFrames(nameof(ensureNoSelfCollision), 1);
         }
         void LateUpdate()
         {
-            float sidespeed = Vector3.Dot(AGMRigid.velocity, transform.right);
-            float downspeed = Vector3.Dot(AGMRigid.velocity, transform.up);
-            float ConstantRelativeForce = MissileConstant.relativeForce.z;
-            Vector3 NewConstantRelativeForce = new Vector3(-sidespeed * AirPhysicsStrength, -downspeed * AirPhysicsStrength, ConstantRelativeForce);
-            MissileConstant.relativeForce = NewConstantRelativeForce;
+            if (Exploding) return;
             Vector3 missileToTargetVector = TargetTransform.TransformPoint(TargetOffset) - transform.position;
             float DeltaTime = Time.deltaTime;
             if (!ColliderActive)
             {
-                if (Vector3.Distance(transform.position, VehicleCenterOfMass.position) > ColliderActiveDistance)
+                Vector3 LaunchPoint = (VehicleRigid.rotation * LocalLaunchPoint) + VehicleRigid.position;
+                if (Vector3.Distance(AGMRigid.position, LaunchPoint) > ColliderActiveDistance)
                 {
                     AGMCollider.enabled = true;
                     ColliderActive = true;
@@ -108,7 +126,14 @@ namespace SaccFlightAndVehicles
                 Vector3 RotationAxis = Vector3.Cross(MissileForward, targetDirection);
                 float deltaAngle = Vector3.Angle(MissileForward, targetDirection);
                 transform.Rotate(RotationAxis, Mathf.Min(RotSpeed * DeltaTime, deltaAngle), Space.World);
+                AGMRigid.rotation = transform.rotation;
             }
+        }
+        void FixedUpdate()
+        {
+            float sidespeed = Vector3.Dot(AGMRigid.velocity, transform.right);
+            float downspeed = Vector3.Dot(AGMRigid.velocity, transform.up);
+            AGMRigid.AddRelativeForce(new Vector3(-sidespeed * AirPhysicsStrength, -downspeed * AirPhysicsStrength, 0), ForceMode.Acceleration);
         }
         public void StartTracking()
         { StartTrack = true; }
@@ -130,12 +155,58 @@ namespace SaccFlightAndVehicles
             AGMCollider.enabled = false;
             AGMRigid.constraints = RigidbodyConstraints.None;
             AGMRigid.angularVelocity = Vector3.zero;
-            transform.localPosition = Vector3.zero;
+            Vector3 LaunchPoint = EntityControl.transform.position + EntityControl.transform.TransformDirection(LocalLaunchPoint);
+            transform.position = LaunchPoint;
+            AGMRigid.position = LaunchPoint;
             StartTrack = false;
             Exploding = false;
         }
         private void OnCollisionEnter(Collision other)
-        { if (!Exploding) { hitwater = false; Explode(); } }
+        {
+            // Ricochets could be added here
+            if (IsOwner && other.gameObject)
+            {
+                SaccEntity HitVehicle = other.gameObject.GetComponent<SaccEntity>();
+                if (HitVehicle)
+                {
+                    int dmgLvl = ArmorPenetrationLevel;
+
+                    int Armor = 0;
+                    if (other.collider.transform.childCount > 0)
+                    {
+                        string pname = other.collider.transform.GetChild(0).name;
+                        getArmorValue(pname, ref Armor);
+                    }
+                    bool DoDamage = false;
+                    dmgLvl = dmgLvl - Armor;
+                    if (dmgLvl > 0) DoDamage = true;
+                    if (DoDamage) HitVehicle.WeaponDamageVehicle(dmgLvl, gameObject);
+                }
+            }
+            if (!Exploding)
+            {
+                hitwater = false; Explode();
+            }
+        }
+        void getArmorValue(string name, ref int armor)
+        {
+            int index = name.LastIndexOf(':');
+            if (index > -1)
+            {
+                name = name.Substring(index);
+                if (name.Length == 3)
+                {
+                    if (name[1] >= '0' && name[1] <= '9')
+                    {
+                        if (name[2] >= '0' && name[2] <= '9')
+                        {
+                            armor = 10 * (name[1] - 48);
+                            armor += name[2] - 48;
+                        }
+                    }
+                }
+            }
+        }
         private void OnTriggerEnter(Collider other)
         {
             if (other && other.gameObject.layer == 4 /* water */)
@@ -173,6 +244,55 @@ namespace SaccFlightAndVehicles
             else { MissileAnimator.SetTrigger("explode"); }
             MissileAnimator.SetBool("hitwater", hitwater);
             SendCustomEventDelayedSeconds(nameof(MoveBackToPool), ExplosionLifeTime);
+
+
+            if (KnockbackRadius == 0) return;
+            //rigidbodies
+            int numHits = Physics.OverlapSphereNonAlloc(transform.position, KnockbackRadius, hitobjs);
+            int numRBs = 0;
+            for (int i = 0; i < numHits; i++)
+            {
+                if (!hitobjs[i]) continue;
+                Rigidbody thisRB = hitobjs[i].attachedRigidbody;
+                if (!thisRB) continue;
+                bool gayflag = false;
+                for (int o = 0; o < numRBs; o++)
+                {
+                    if (thisRB == HitRBs[o])
+                    {
+                        gayflag = true;
+                        break;
+                    }
+                }
+                if (gayflag) continue;
+                HitRBs[numRBs] = thisRB;
+                numRBs++;
+                if (numRBs == 30) break;
+            }
+            for (int i = 0; i < numRBs; i++)
+            {
+                if (HitRBs[i].isKinematic) continue;
+                Vector3 explosionDirRB = HitRBs[i].worldCenterOfMass - transform.position;
+                float knockbackRB = KnockbackRadius - explosionDirRB.magnitude;
+                if (knockbackRB > 0)
+                {
+                    HitRBs[i].AddForce(KnockbackStrength_rigidbody * knockbackRB * explosionDirRB.normalized, KnobckbackModeAcceleration ? ForceMode.VelocityChange : ForceMode.Impulse);
+                    SaccEntity hitEntity = HitRBs[i].GetComponent<SaccEntity>();
+                    if (hitEntity && hitEntity.IsOwner)
+                    {
+                        hitEntity.SendEventToExtensions("SFEXT_L_WakeUp");
+                    }
+                }
+            }
+            //players
+            Vector3 explosionDir = Networking.LocalPlayer.GetTrackingData(VRCPlayerApi.TrackingDataType.Head).position - transform.position;
+            float knockback = KnockbackRadius - explosionDir.magnitude;
+            if (knockback > 0)
+            {
+                Networking.LocalPlayer.SetVelocity(Networking.LocalPlayer.GetVelocity() + KnockbackStrength_players * knockback * explosionDir.normalized);
+            }
         }
+        Collider[] hitobjs = new Collider[100];
+        Rigidbody[] HitRBs = new Rigidbody[30];
     }
 }

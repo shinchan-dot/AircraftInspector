@@ -19,22 +19,30 @@ namespace SaccFlightAndVehicles
         public float FlapsDragMulti = 1.4f;
         [Tooltip("Multiply Vehicle's lift by this amount while flaps are enabled")]
         public float FlapsLiftMulti = 1.35f;
+        [Tooltip("Multiply Vehicle's vel lift by this amount while flaps are enabled")]
+        public float FlapsVelLiftMulti = 1f;
         [Tooltip("Add this much to aircraft's Max Lift by this amount while flaps are enabled")]
         public float FlapsExtraMaxLift = 0;
-        private SaccEntity EntityControl;
-        private bool UseLeftTrigger = false;
+        [Tooltip("Add this much to aircraft's Straighten values while flaps are enabled")]
+        public float FlapsStraightenMulti = 1;
+        private float StraightenStartValue_Pitch;
+        private float StraightenStartValue_Yaw;
+        [System.NonSerializedAttribute] public bool LeftDial = false;
+        [System.NonSerializedAttribute] public int DialPosition = -999;
+        [System.NonSerializedAttribute] public SaccEntity EntityControl;
+        [System.NonSerializedAttribute] public SAV_PassengerFunctionsController PassengerFunctionsControl;
         [System.NonSerializedAttribute] public bool Flaps = false;
         private bool TriggerLastFrame;
         private bool DragApplied;
         private bool LiftApplied;
+        private bool VelLiftApplied;
+        private bool StraightenApplied;
         private bool MaxLiftApplied;
         private bool InVR = false;
         private bool Selected;
         private bool Asleep;
         private bool InEditor = true;
         private VRCPlayerApi localPlayer;
-        public void DFUNC_LeftDial() { UseLeftTrigger = true; }
-        public void DFUNC_RightDial() { UseLeftTrigger = false; }
         public void DFUNC_Selected()
         {
             TriggerLastFrame = true;
@@ -50,13 +58,14 @@ namespace SaccFlightAndVehicles
         {
             localPlayer = Networking.LocalPlayer;
             if (localPlayer != null) { InEditor = false; }
-            EntityControl = (SaccEntity)SAVControl.GetProgramVariable("EntityControl");
             //to match how the old values worked
             FlapsDragMulti -= 1f;
             FlapsLiftMulti -= 1f;
+            FlapsVelLiftMulti -= 1f;
+            InVR = EntityControl.InVR;
 
-            if ((bool)SAVControl.GetProgramVariable("AutoAdjustValuesToMass"))
-            { FlapsExtraMaxLift *= ((Rigidbody)SAVControl.GetProgramVariable("VehicleRigidbody")).mass; }
+            StraightenStartValue_Pitch = (float)SAVControl.GetProgramVariable("VelStraightenStrPitch");
+            StraightenStartValue_Yaw = (float)SAVControl.GetProgramVariable("VelStraightenStrYaw");
 
             if (Dial_Funcon) Dial_Funcon.SetActive(Flaps);
             if (DefaultFlapsOff) { SetFlapsOff(); }
@@ -64,8 +73,8 @@ namespace SaccFlightAndVehicles
         }
         public void SFEXT_O_PilotEnter()
         {
+            InVR = EntityControl.InVR;
             if (Flaps) { gameObject.SetActive(true); }
-            if (!InEditor) { InVR = Networking.LocalPlayer.IsUserInVR(); }//move to start when they fix the bug
             if (Dial_Funcon) Dial_Funcon.SetActive(Flaps);
         }
         public void SFEXT_O_PilotExit()
@@ -83,8 +92,9 @@ namespace SaccFlightAndVehicles
             else
             { SetFlapsOn(); }
         }
-        public void SFEXT_O_RespawnButton()
+        public void SFEXT_G_RespawnButton()
         {
+            if (!EntityControl.IsOwner) return;
             if (DefaultFlapsOff)
             { SetFlapsOff(); }
             else
@@ -105,7 +115,7 @@ namespace SaccFlightAndVehicles
                 if (Selected)
                 {
                     float Trigger;
-                    if (UseLeftTrigger)
+                    if (LeftDial)
                     { Trigger = Input.GetAxisRaw("Oculus_CrossPlatform_PrimaryIndexTrigger"); }
                     else
                     { Trigger = Input.GetAxisRaw("Oculus_CrossPlatform_SecondaryIndexTrigger"); }
@@ -153,6 +163,7 @@ namespace SaccFlightAndVehicles
         }
         public void SetFlapsOff()
         {
+            if (!Flaps) { return; }
             if (Dial_Funcon) Dial_Funcon.SetActive(false);
             Flaps = false;
             FlapsAnimator.SetBool(AnimatorBool, false);
@@ -167,13 +178,24 @@ namespace SaccFlightAndVehicles
                 SAVControl.SetProgramVariable("ExtraLift", (float)SAVControl.GetProgramVariable("ExtraLift") - FlapsLiftMulti);
                 LiftApplied = false;
             }
+            if (VelLiftApplied)
+            {
+                SAVControl.SetProgramVariable("ExtraVelLift", (float)SAVControl.GetProgramVariable("ExtraVelLift") - FlapsVelLiftMulti);
+                VelLiftApplied = false;
+            }
+            if (StraightenApplied)
+            {
+                SAVControl.SetProgramVariable("VelStraightenStrYaw", StraightenStartValue_Yaw);
+                SAVControl.SetProgramVariable("VelStraightenStrPitch", StraightenStartValue_Pitch);
+                StraightenApplied = false;
+            }
             if (MaxLiftApplied)
             {
                 SAVControl.SetProgramVariable("MaxLift", (float)SAVControl.GetProgramVariable("MaxLift") - FlapsExtraMaxLift);
                 MaxLiftApplied = false;
             }
 
-            if ((bool)SAVControl.GetProgramVariable("IsOwner"))
+            if (EntityControl.IsOwner)
             {
                 if (!InVR) { gameObject.SetActive(false); }//for desktop Users
                 EntityControl.SendEventToExtensions("SFEXT_O_FlapsOff");
@@ -181,6 +203,7 @@ namespace SaccFlightAndVehicles
         }
         public void SetFlapsOn()
         {
+            if (Flaps) { return; }
             Flaps = true;
             FlapsAnimator.SetBool(AnimatorBool, true);
             if (Dial_Funcon) Dial_Funcon.SetActive(true);
@@ -195,13 +218,24 @@ namespace SaccFlightAndVehicles
                 SAVControl.SetProgramVariable("ExtraLift", (float)SAVControl.GetProgramVariable("ExtraLift") + FlapsLiftMulti);
                 LiftApplied = true;
             }
+            if (!VelLiftApplied)
+            {
+                SAVControl.SetProgramVariable("ExtraVelLift", (float)SAVControl.GetProgramVariable("ExtraVelLift") + FlapsVelLiftMulti);
+                VelLiftApplied = true;
+            }
+            if (!StraightenApplied)
+            {
+                SAVControl.SetProgramVariable("VelStraightenStrYaw", StraightenStartValue_Yaw * FlapsStraightenMulti);
+                SAVControl.SetProgramVariable("VelStraightenStrPitch", StraightenStartValue_Pitch * FlapsStraightenMulti);
+                StraightenApplied = true;
+            }
             if (!MaxLiftApplied)
             {
                 SAVControl.SetProgramVariable("MaxLift", (float)SAVControl.GetProgramVariable("MaxLift") + FlapsExtraMaxLift);
                 MaxLiftApplied = true;
             }
 
-            if ((bool)SAVControl.GetProgramVariable("IsOwner"))
+            if (EntityControl.IsOwner)
             {
                 gameObject.SetActive(true);//for desktop Users
                 EntityControl.SendEventToExtensions("SFEXT_O_FlapsOn");

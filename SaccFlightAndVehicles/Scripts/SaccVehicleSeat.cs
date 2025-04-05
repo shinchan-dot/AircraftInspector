@@ -12,20 +12,24 @@ namespace SaccFlightAndVehicles
         public SaccEntity EntityControl;
         [Tooltip("Gameobject with script that runs when you enter the seat to edjust your view position")]
         public bool IsPilotSeat = false;
-        [Header("Removing ThisSeatOnly next version. EnableInSeat replaces it.")]
-        [Tooltip("Object that is enabled only when sitting in this seat")]
-        public GameObject ThisSeatOnly;
+        [Tooltip("Optional: Use to set up passenger seat with its own function dials")]
+        public SAV_PassengerFunctionsController PassengerFunctions;
         [Tooltip("Objects that are enabled only when sitting in this seat")]
         public GameObject[] EnableInSeat;
+        [Tooltip("Objects that are disabled only when sitting in this seat")]
+        public GameObject[] DisableInSeat;
         public bool AdjustSeatPosition = true;
         // public bool AdjustSeatRotation = true; //YAWCALIBRATION
         public Transform TargetEyePosition;
         [Tooltip("Let other scripts know that this seat is on the outside of the vehicle (stop sound changing when closing canopy)")]
-        public bool SeatOutSideVehicle;
+        [SerializeField] private bool SeatOutSideVehicle;
         [Tooltip("How far to move the seat to the side when looking backwards in desktop")]
         [SerializeField] float HeadXOffset = 0.25f;
         [Tooltip("Disable the ability for desktop users to turn 180 degrees")]
         public bool Disable180Rotation = false;
+        [SerializeField] Animator AnimBoolAnimator;
+        [Tooltip("Boolean to set to true on the above animator when a player is sitting in this seat")]
+        [SerializeField] string AnimBoolOnEnter;
         // [Tooltip("Calbrate rotation towards this transform's forward vector, leave empty to use this station's transform")]
         // public Transform RotationCalibrationTarget; //YAWCALIBRATION
         private Vector3 SeatAdjustedPos;
@@ -57,6 +61,7 @@ namespace SaccFlightAndVehicles
         private bool DoVoiceVolumeChange = true;
         [System.NonSerializedAttribute] public VRCStation Station;
         [System.NonSerializedAttribute] public bool Fake;//'Fake' exit from seat disables stuf flike seat adjuster, used for pilot swapping
+        [System.NonSerialized] public int numOpenDoors;
         private Transform Seat;
         private Vector3 SeatPosTarget;
         private Quaternion SeatRotTarget;
@@ -72,18 +77,28 @@ namespace SaccFlightAndVehicles
             Seat = Station.stationEnterPlayerLocation;
             SeatStartRot = Seat.localRotation;
             SeatAdjustedPos = SeatStartPos = Seat.localPosition;
-            if (InEditor)
-            {
-                if (ThisSeatOnly) { ThisSeatOnly.SetActive(true); }
-                for (int i = 0; i < EnableInSeat.Length; i++)
-                { if (EnableInSeat[i]) EnableInSeat[i].SetActive(true); }
-            }
             DT180SeatCalcCounter = Random.Range(0, 10);
             for (int i = 0; i < EntityControl.ExternalSeats.Length; i++)
             {
                 if (Station == EntityControl.ExternalSeats[i])
                 { ThisSeatExternal = true; break; }
             }
+            if (InEditor)
+            {
+                for (int i = 0; i < EnableInSeat.Length; i++)
+                { if (EnableInSeat[i]) EnableInSeat[i].SetActive(true); }
+                for (int i = 0; i < DisableInSeat.Length; i++)
+                { if (DisableInSeat[i]) DisableInSeat[i].SetActive(false); }
+            }
+            else
+            {
+                for (int i = 0; i < EnableInSeat.Length; i++)
+                { if (EnableInSeat[i]) EnableInSeat[i].SetActive(false); }
+                for (int i = 0; i < DisableInSeat.Length; i++)
+                { if (DisableInSeat[i]) DisableInSeat[i].SetActive(true); }
+            }
+            if (PassengerFunctions) { PassengerFunctions.Station = Station; }
+            if (SeatOutSideVehicle) { numOpenDoors++; }
         }
         public override void Interact()//entering the vehicle
         {
@@ -111,13 +126,20 @@ namespace SaccFlightAndVehicles
                     if (!localPlayer.IsOwner(gameObject))
                     { Networking.SetOwner(localPlayer, gameObject); }
                     EntityControl.MySeat = ThisStationID;
+                    if (PassengerFunctions)
+                    { PassengerFunctions.UserEnterVehicleLocal(); }
                     if (IsPilotSeat)
                     { EntityControl.PilotEnterVehicleLocal(); }
                     else
-                    { EntityControl.PassengerEnterVehicleLocal(); }
-                    if (ThisSeatOnly) { ThisSeatOnly.SetActive(true); }
+                    {
+                        if (PassengerFunctions)
+                        { PassengerFunctions.passengerFuncIgnorePassengerFlag = true; }
+                        EntityControl.PassengerEnterVehicleLocal();
+                    }
                     for (int i = 0; i < EnableInSeat.Length; i++)
                     { if (EnableInSeat[i]) EnableInSeat[i].SetActive(true); }
+                    for (int i = 0; i < DisableInSeat.Length; i++)
+                    { if (DisableInSeat[i]) DisableInSeat[i].SetActive(false); }
 
                     if (!Fake && AdjustSeatPosition && TargetEyePosition)
                     {
@@ -152,20 +174,31 @@ namespace SaccFlightAndVehicles
                     }
                 }
                 if (!player.IsUserInVR() && !Fake && !Disable180Rotation) { ThreeSixtySeat(); }
+                if (PassengerFunctions)
+                { PassengerFunctions.UserEnterVehicleGlobal(player); }
                 if (IsPilotSeat) { EntityControl.PilotEnterVehicleGlobal(player); }
                 else
-                { EntityControl.PassengerEnterVehicleGlobal(); }
+                {
+                    if (PassengerFunctions)
+                    { PassengerFunctions.passengerFuncIgnorePassengerFlag = true; }
+                    EntityControl.PassengerEnterVehicleGlobal(player);
+                }
+                if (AnimBoolAnimator) { AnimBoolAnimator.SetBool(AnimBoolOnEnter, true); }
             }
         }
         public override void OnStationExited(VRCPlayerApi player)
         {
             if (!SeatInitialized) { InitializeSeat(); }
-            PlayerExitPlane(player);
-            if (!Fake)
+            if (player != null)
             {
-                Seat.localPosition = SeatAdjustedPos = SeatPosTarget = SeatStartPos;
-                Seat.localRotation = SeatRotTarget = SeatStartRot;
-                // _adjustedPos.z = Seat.localEulerAngles.y;//YAWCALIBRATION
+                PlayerExitPlane(player);
+                if (!Fake)
+                {
+                    Seat.localPosition = SeatAdjustedPos = SeatPosTarget = SeatStartPos;
+                    Seat.localRotation = SeatRotTarget = SeatStartRot;
+                    // _adjustedPos.z = Seat.localEulerAngles.y;//YAWCALIBRATION
+                }
+                if (AnimBoolAnimator) { AnimBoolAnimator.SetBool(AnimBoolOnEnter, false); }
             }
         }
         public override void OnPlayerLeft(VRCPlayerApi player)
@@ -173,8 +206,18 @@ namespace SaccFlightAndVehicles
             if (!SeatInitialized) { InitializeSeat(); }
             if (Utilities.IsValid(player) && player.playerId == EntityControl.SeatedPlayers[ThisStationID])
             {
+                if (PassengerFunctions)
+                    PassengerFunctions.pilotLeftFlag = true;
+                else if (IsPilotSeat)
+                    EntityControl.pilotLeftFlag = true;
                 PlayerExitPlane(player);
+                SendCustomEventDelayedFrames(nameof(resetPilotLeftFlag), 1);
             }
+        }
+        public void resetPilotLeftFlag()
+        {
+            if (PassengerFunctions) PassengerFunctions.pilotLeftFlag = false;
+            else EntityControl.pilotLeftFlag = false;
         }
         public void PlayerExitPlane(VRCPlayerApi player)
         {
@@ -185,8 +228,6 @@ namespace SaccFlightAndVehicles
             {
                 SeatOccupied = false;
                 DoVoiceVolumeChange = EntityControl.DoVoiceVolumeChange;
-                if (IsPilotSeat) { EntityControl.PilotExitVehicle(player); }
-                else { EntityControl.PassengerExitVehicleGlobal(); }
                 if (DoVoiceVolumeChange)
                 {
                     SetVoiceOutside(player);
@@ -195,8 +236,14 @@ namespace SaccFlightAndVehicles
                 {
                     InSeat = false;
                     EntityControl.MySeat = -1;
+                    if (PassengerFunctions)
+                    { PassengerFunctions.UserExitVehicleLocal(); }
                     if (!IsPilotSeat)
-                    { EntityControl.PassengerExitVehicleLocal(); }
+                    {
+                        if (PassengerFunctions)
+                        { PassengerFunctions.passengerFuncIgnorePassengerFlag = true; }
+                        EntityControl.PassengerExitVehicleLocal();
+                    }
                     if (DoVoiceVolumeChange)
                     {
                         //undo voice distances of all players inside the vehicle
@@ -209,10 +256,20 @@ namespace SaccFlightAndVehicles
                             }
                         }
                     }
-                    if (ThisSeatOnly) { ThisSeatOnly.SetActive(false); }
                     for (int i = 0; i < EnableInSeat.Length; i++)
                     { if (EnableInSeat[i]) EnableInSeat[i].SetActive(false); }
+                    for (int i = 0; i < DisableInSeat.Length; i++)
+                    { if (DisableInSeat[i]) DisableInSeat[i].SetActive(true); }
                 }
+                if (IsPilotSeat) { EntityControl.PilotExitVehicle(player); }
+                else
+                {
+                    if (PassengerFunctions)
+                    { PassengerFunctions.passengerFuncIgnorePassengerFlag = true; }
+                    EntityControl.PassengerExitVehicleGlobal(player);
+                }
+                if (PassengerFunctions)
+                { PassengerFunctions.UserExitVehicleGlobal(); }
             }
         }
         private void SetVoiceInside(VRCPlayerApi Player)
@@ -271,7 +328,7 @@ namespace SaccFlightAndVehicles
                     {
                         if (Mathf.Abs(TargetRelative.y) > 0.01f)
                         {
-                            SeatAdjustedPos -= Seat.InverseTransformDirection(TargetEyePosition.up * FindNearestPowerOf2Below(TargetRelative.y));//YAW CALIBRATION use transform instead of Seat (breaks AAGun)
+                            SeatAdjustedPos -= Seat.InverseTransformDirection((TargetEyePosition.up / TargetEyePosition.lossyScale.y) * FindNearestPowerOf2Below(TargetRelative.y));//YAW CALIBRATION use transform instead of Seat (breaks AAGun)
                         }
                         else
                         {
@@ -285,7 +342,7 @@ namespace SaccFlightAndVehicles
                     {
                         if (Mathf.Abs(TargetRelative.z) > 0.01f)
                         {
-                            SeatAdjustedPos -= Seat.InverseTransformDirection(TargetEyePosition.forward * FindNearestPowerOf2Below(TargetRelative.z));//YAW CALIBRATION use transform instead of Seat (breaks AAGun)
+                            SeatAdjustedPos -= Seat.InverseTransformDirection((TargetEyePosition.forward / TargetEyePosition.lossyScale.z) * FindNearestPowerOf2Below(TargetRelative.z));//YAW CALIBRATION use transform instead of Seat (breaks AAGun)
                         }
                         else
                         {

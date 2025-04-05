@@ -1,9 +1,9 @@
-
+ï»¿
 using UdonSharp;
 using UnityEngine;
 using VRC.SDKBase;
 using VRC.Udon;
-
+//
 namespace SaccFlightAndVehicles
 {
     [UdonBehaviourSyncMode(BehaviourSyncMode.Continuous)]
@@ -14,8 +14,6 @@ namespace SaccFlightAndVehicles
         public SaccEntity EntityControl;
         [Tooltip("The object containing all non-trigger colliders for the vehicle, their layers are changed when entering and exiting")]
         public Transform VehicleMesh;
-        [Tooltip("Layer to set the VehicleMesh and it's children to when entering vehicle")]
-        public int OnboardVehicleLayer = 31;
         [Tooltip("Change all children of VehicleMesh, or just the objects with colliders?")]
         public bool OnlyChangeColliders = false;
         [Tooltip("Position used to raycast from in order to calculate ground effect")]
@@ -30,8 +28,9 @@ namespace SaccFlightAndVehicles
         public float GroundDetectorRayDistance = .44f;
         [Tooltip("HP of the vehicle")]
         public LayerMask GroundDetectorLayers = 2049;
-        [UdonSynced(UdonSyncMode.None)] public float Health = 23f;
-        [Tooltip("Teleport the vehicle to the oposite side of the map when flying too far in one direction?")]
+        [UdonSynced(UdonSyncMode.None)] public float Health = 53f;
+        [Tooltip("If health is lower than this, vehicle instantly explodes")]
+        public float ExplodeHealth = -200f;
         public bool RepeatingWorld = true;
         [Tooltip("Distance you can travel away from world origin before being teleported to the other side of the map. Not recommended to increase, floating point innacuracy and game freezing issues may occur if larger than default")]
         public float RepeatingWorldDistance = 20000;
@@ -44,7 +43,11 @@ namespace SaccFlightAndVehicles
         public float ThrottleAfterburnerPoint = 0.8f;
         [Tooltip("Disable Thrust/VTOL rotation values transition calculations and assume VTOL mode always (for helicopters)")]
         public bool VTOLOnly = false;
+        [Tooltip("Wing scripts to enable while doing vehicle physics")]
+        public UdonSharpBehaviour[] LiftSurfaces;
+        private bool LiftSurfacesEnabled = true;
         [Header("Response:")]
+        [Header("Some values require re-entering playmode to take full effect (ThrustVec..)")]
         [Tooltip("Vehicle thrust at max throttle without afterburner")]
         public float ThrottleStrength = 20f;
         [Tooltip("Make VR Throttle motion controls use the Y axis instead of the Z axis for adjustment (Helicopter collective)")]
@@ -71,7 +74,7 @@ namespace SaccFlightAndVehicles
         public float AirFriction = 0.0004f;
         [Tooltip("Pitch force multiplier, (gets stronger with airspeed)")]
         public float PitchStrength = 5f;
-        [Tooltip("Pitch rotation force (as multiple of PitchStrength) (doesn't get stronger with airspeed, useful for helicopters and ridiculous jets). Setting this to a non - zero value disables inversion of joystick pitch controls when vehicle is travelling backwards")]
+        [Tooltip("Pitch rotation force (as multiple of PitchStrength) (doesn't get stronger with airspeed, useful for helicopters and ridiculous jets). Setting this to a nonzero value disables inversion of joystick pitch controls when vehicle is travelling backwards")]
         [Range(0.0f, 1f)]
         public float PitchThrustVecMulti = 0f;
         [Tooltip("Force that stops vehicle from pitching, (gets stronger with airspeed)")]
@@ -84,7 +87,7 @@ namespace SaccFlightAndVehicles
         public float ReversingPitchStrengthMulti = 2;
         [Tooltip("Yaw force multiplier, (gets stronger with airspeed)")]
         public float YawStrength = 3f;
-        [Tooltip("Yaw rotation force (as multiple of YawStrength) (doesn't get stronger with airspeed, useful for helicopters and ridiculous jets). Setting this to a non - zero value disables inversion of joystick pitch controls when vehicle is travelling backwards")]
+        [Tooltip("Yaw rotation force (as multiple of YawStrength) (doesn't get stronger with airspeed, useful for helicopters and ridiculous jets). Setting this to a nonzero value disables inversion of joystick pitch controls when vehicle is travelling backwards")]
         [Range(0.0f, 1f)]
         public float YawThrustVecMulti = 0f;
         [Tooltip("Force that stops vehicle from yawing, (gets stronger with airspeed)")]
@@ -97,7 +100,7 @@ namespace SaccFlightAndVehicles
         public float ReversingYawStrengthMulti = 2.4f;
         [Tooltip("Roll force multiplier, (gets stronger with airspeed)")]
         public float RollStrength = 450f;
-        [Tooltip("Roll rotation force (as multiple of RollStrength) (doesn't get stronger with airspeed, useful for helicopters and ridiculous jets). Setting this to a non - zero value disables inversion of joystick pitch controls when vehicle is travelling backwards")]
+        [Tooltip("Roll rotation force (as multiple of RollStrength) (doesn't get stronger with airspeed, useful for helicopters and ridiculous jets). Setting this to a nonzero value disables inversion of joystick pitch controls when vehicle is travelling backwards")]
         [Range(0.0f, 1f)]
         public float RollThrustVecMulti = 0f;
         [Tooltip("Force that stops vehicle from rolling, (gets stronger with airspeed)")]
@@ -150,6 +153,8 @@ namespace SaccFlightAndVehicles
         public float HighPitchAoaMinLift = 0.2f;
         [Tooltip("See above")]
         public float HighYawAoaMinLift = 0.2f;
+        [Tooltip("The angle at which the aircraft's wings produce zero lift. Influenced by the wing's camber angle. A larger camber usually results in a lower ZeroLiftAoA. Helps simulate the plane's natural glide. Usually a negative value.")]
+        public float ZeroLiftAoA = 0f;
         [Tooltip("Degrees per second the vehicle rotates on the ground. Uses simple object rotation with a lerp, no real physics to it.")]
         public float TaxiRotationSpeed = 35f;
         [Tooltip("How lerped the taxi movement rotation is")]
@@ -158,6 +163,8 @@ namespace SaccFlightAndVehicles
         public bool DisallowTaxiRotationWhileStill = false;
         [Tooltip("When the above is ticked, This is the speed at which the vehicle will reach its full turning speed. Meters/second.")]
         public float TaxiFullTurningSpeed = 20f;
+        [Tooltip("Changes suspension paramater ally to disable suspension down on V1 speed to avoid sticky wheels.")]
+        public bool WheelSuspension = false;
         [Tooltip("Adjust how steep the lift curve is. Higher = more lift")]
         public float Lift = 0.00015f;
         [Tooltip("How much angle of attack on yaw turns the vehicle. Yaw steering strength in air")]
@@ -165,13 +172,17 @@ namespace SaccFlightAndVehicles
         [Tooltip("Maximum value for lift, as it's exponential it's wise to stop it at some point?")]
         public float MaxLift = 10f;
         [Tooltip("Push the vehicle up based on speed. Used to counter the fact that without it, the plane's nose will droop down due to gravity. Slower planes need a higher value.")]
-        public float VelLift = 1f;
+        public float VelLift = 0.00015f;
         [Tooltip("Maximum Vel Lift, to stop the nose being pushed up. Technically should probably be 9.81 to counter gravity exactly")]
         public float VelLiftMax = 10f;
         [Tooltip("Vehicle will take damage if experiences more Gs that this (Internally Gs are calculated in all directions, the HUD shows only vertical Gs so it will differ slightly")]
         public float MaxGs = 40f;
         [Tooltip("Damage taken Per G above maxGs, per second.\n(Gs - MaxGs) * GDamage = damage/second")]
         public float GDamage = 10f;
+        [Tooltip("Speed at which vehicle will start to take damage from a crash (m/s)")]
+        public float Crash_Damage_Speed = 10f;
+        [Tooltip("Speed at which vehicle will take damage equal to its max health from a crash (m/s)")]
+        public float Crash_Death_Speed = 50f;
         [Tooltip("Length of the trace that looks for the ground to calculate ground effect")]
         public float GroundEffectMaxDistance = 7;
         [Tooltip("Multiply the force of the ground effect")]
@@ -206,8 +217,7 @@ namespace SaccFlightAndVehicles
         [Tooltip("Real angle offset from (0 == thrusting backwards) that the SFEXT_O_Enter/ExitVTOL is called. The event used for disabling cruise and flight limits")]
         public float EnterVTOLEvent_Angle = 20;
         [Header("Other:")]
-        [Tooltip("Adjusts all values that would need to be adjusted if you changed the mass automatically on Start(). Including all wheel colliders suspension values")]
-        public bool AutoAdjustValuesToMass = true;
+        public bool ReverseThrustAllowAfterburner = false;
         [Tooltip("Transform to base the pilot's throttle and joystick controls from. Used to make vertical throttle for helicopters, or if the cockpit of your vehicle can move, on transforming vehicle")]
         public Transform ControlsRoot;
         [Tooltip("Wind speed on each axis")]
@@ -265,6 +275,8 @@ namespace SaccFlightAndVehicles
         public bool EngineOnOnEnter = true;
         [Tooltip("Set Engine Off when entering the vehicle?")]
         public bool EngineOffOnExit = true;
+        public bool DroneMode = false;
+        [Header("Debug:")]
         [FieldChangeCallback(nameof(EngineOn))] public bool _EngineOn = false;
         public bool EngineOn
         {
@@ -330,25 +342,34 @@ namespace SaccFlightAndVehicles
         public void SetEngineOff()
         { EngineOn = false; }
         [System.NonSerializedAttribute] public float AllGs;
-        [System.NonSerializedAttribute] [UdonSynced(UdonSyncMode.Linear)] public float EngineOutput = 0f;
+        [System.NonSerializedAttribute][UdonSynced(UdonSyncMode.Linear)] public float EngineOutput = 0f;
         [System.NonSerializedAttribute] public Vector3 CurrentVel = Vector3.zero;
-        [System.NonSerializedAttribute] [UdonSynced(UdonSyncMode.Linear)] public float VertGs = 1f;
+        [System.NonSerializedAttribute][UdonSynced(UdonSyncMode.Linear)] public float VertGs = 1f;
         [System.NonSerializedAttribute] public float AngleOfAttackPitch;
         [System.NonSerializedAttribute] public float AngleOfAttackYaw;
-        [System.NonSerializedAttribute] [UdonSynced(UdonSyncMode.Linear)] public float AngleOfAttack;//MAX of yaw & pitch aoa //used by effectscontroller and hudcontroller
+        [System.NonSerializedAttribute][UdonSynced(UdonSyncMode.Linear)] public float AngleOfAttack;//MAX of yaw & pitch aoa //used by effectscontroller and hudcontroller
         [System.NonSerializedAttribute] public bool Occupied = false; //this is true if someone is sitting in pilot seat
         [System.NonSerialized] public int NumPassengers;
         [System.NonSerializedAttribute] public float VTOLAngle;
 
         [System.NonSerializedAttribute] public Animator VehicleAnimator;
-        [System.NonSerializedAttribute] public ConstantForce VehicleConstantForce;
+
+#if UNITY_EDITOR // for debugging
+        public Vector3 VehicleForce;
+        public Vector3 VehicleTorque;
+        public Vector3 Pitching;
+        public Vector3 Yawing;
+# else
+        private Vector3 VehicleForce;
+        private Vector3 VehicleTorque;
+        private Vector3 Pitching;
+        private Vector3 Yawing;
+#endif
         [System.NonSerializedAttribute] public Rigidbody VehicleRigidbody;
         [System.NonSerializedAttribute] public Transform VehicleTransform;
         [System.NonSerializedAttribute] public float VTOLAngleForward90;//dot converted to angle, 0=0 90=1 max 1, for adjusting values that change with engine angle
         [System.NonSerializedAttribute] public float VTOLAngleForwardDot;
         [System.NonSerializedAttribute] public bool VTOLAngleForward = true;
-        [System.NonSerializedAttribute] public Vector3 Gs3;
-        private VRC.SDK3.Components.VRCObjectSync VehicleObjectSync;
         private GameObject VehicleGameObj;
         [System.NonSerializedAttribute] public Transform CenterOfMass;
         private float LerpedRoll;
@@ -369,7 +390,7 @@ namespace SaccFlightAndVehicles
         [System.NonSerializedAttribute] public float FullHealth;
         [System.NonSerializedAttribute] public bool Taxiing = false;
         [System.NonSerializedAttribute] public bool Floating = false;
-        [System.NonSerializedAttribute] [UdonSynced(UdonSyncMode.Linear)] public Vector3 RotationInputs;
+        [System.NonSerializedAttribute][UdonSynced(UdonSyncMode.Linear)] public Vector3 RotationInputs;
         [System.NonSerializedAttribute] public bool Piloting = false;
         [System.NonSerializedAttribute] public bool Passenger = false;
         [System.NonSerializedAttribute] public bool InEditor = true;
@@ -382,11 +403,10 @@ namespace SaccFlightAndVehicles
         private float AoALiftYaw;
         private float AoALiftPitch;
         private float AoALift_Min;
-        private Vector3 Pitching;
-        private Vector3 Yawing;
         [System.NonSerializedAttribute] public float Taxiinglerper;
         [System.NonSerializedAttribute] public float ExtraDrag = 1;
         [System.NonSerializedAttribute] public float ExtraLift = 1;
+        [System.NonSerializedAttribute] public float ExtraVelLift = 1;
         private float ReversingPitchStrength;
         private float ReversingYawStrength;
         private float ReversingRollStrength;
@@ -406,7 +426,6 @@ namespace SaccFlightAndVehicles
         private float SoundBarrier;
         [System.NonSerializedAttribute] public float FullFuel;
         private float LowFuelDivider;
-        private float LastResupplyTime = 0;
         [System.NonSerializedAttribute] public bool Asleep;
         private bool Initialized;
         [System.NonSerializedAttribute] public bool IsAirVehicle = true;//could be checked by any script targeting/checking this vehicle to see if it is the kind of vehicle they're looking for
@@ -415,9 +434,6 @@ namespace SaccFlightAndVehicles
         [System.NonSerializedAttribute] public int MissilesIncomingHeat = 0;
         [System.NonSerializedAttribute] public int MissilesIncomingRadar = 0;
         [System.NonSerializedAttribute] public int MissilesIncomingOther = 0;
-        [System.NonSerializedAttribute] public Vector3 Spawnposition;
-        [System.NonSerializedAttribute] public Quaternion Spawnrotation;
-        [System.NonSerializedAttribute] public int OutsideVehicleLayer;
         [System.NonSerializedAttribute] public bool DoAAMTargeting;
         [System.NonSerializedAttribute] public Rigidbody GDHitRigidbody;
         [System.NonSerializedAttribute] public bool UsingManualSync;
@@ -496,27 +512,6 @@ namespace SaccFlightAndVehicles
             }
             get => DisablePhysicsAndInputs;
         }
-        [System.NonSerializedAttribute] public bool _OverrideConstantForce;
-        [System.NonSerializedAttribute, FieldChangeCallback(nameof(OverrideConstantForce_))] public int OverrideConstantForce = 0;
-        public int OverrideConstantForce_
-        {
-            set
-            {
-                if (value > 0 && OverrideConstantForce == 0)
-                {
-                    EntityControl.SendEventToExtensions("SFEXT_O_OverrideConstantForce_Activated");
-                }
-                else if (value == 0 && OverrideConstantForce > 0)
-                {
-                    EntityControl.SendEventToExtensions("SFEXT_O_OverrideConstantForce_Deactivated");
-                }
-                _OverrideConstantForce = value > 0;
-                OverrideConstantForce = value;
-            }
-            get => OverrideConstantForce;
-        }
-        [System.NonSerializedAttribute] public Vector3 CFRelativeForceOverride;
-        [System.NonSerializedAttribute] public Vector3 CFRelativeTorqueOverride;
         [System.NonSerializedAttribute] public bool _DisableTaxiRotation;
         [System.NonSerializedAttribute, FieldChangeCallback(nameof(DisableTaxiRotation_))] public int DisableTaxiRotation = 0;
         public int DisableTaxiRotation_
@@ -614,23 +609,60 @@ namespace SaccFlightAndVehicles
             }
             get => PreventEngineToggle;
         }
-
-
-        [System.NonSerializedAttribute] public int ReSupplied = 0;
+        [System.NonSerialized] public float InverThrustMultiplier = -1;
+        [System.NonSerializedAttribute] public bool _InvertThrust;
+        [System.NonSerializedAttribute, FieldChangeCallback(nameof(InvertThrust_))] public int InvertThrust = 0;
+        public int InvertThrust_
+        {
+            set
+            {
+                if (value > 0 && InvertThrust == 0)
+                {
+                    EntityControl.SendEventToExtensions("SFEXT_O_InvertThrust_Activated");
+                }
+                else if (value == 0 && InvertThrust > 0)
+                {
+                    EntityControl.SendEventToExtensions("SFEXT_O_InvertThrust_Deactivated");
+                }
+                _InvertThrust = value > 0;
+                InvertThrust = value;
+            }
+            get => InvertThrust;
+        }
+        [System.NonSerializedAttribute] public bool _DisablePhysicsApplication;
+        [System.NonSerializedAttribute, FieldChangeCallback(nameof(DisablePhysicsApplication_))] public int DisablePhysicsApplication = 0;
+        public int DisablePhysicsApplication_
+        {
+            set
+            {
+                if (value > 0 && DisablePhysicsApplication == 0)
+                {
+                    EntityControl.SendEventToExtensions("SFEXT_O_DisablePhysicsApplication_Activated");
+                }
+                else if (value == 0 && DisablePhysicsApplication > 0)
+                {
+                    EntityControl.SendEventToExtensions("SFEXT_O_DisablePhysicsApplication_Deactivated");
+                }
+                _DisablePhysicsApplication = value > 0;
+                DisablePhysicsApplication = value;
+            }
+            get => DisablePhysicsApplication;
+        }
+#if UNITY_EDITOR
+        public bool SetVel;
+        public Vector3 VelToSet;
+#endif
         public void SFEXT_L_EntityStart()
         {
             Initialized = true;
             VehicleGameObj = EntityControl.gameObject;
             VehicleTransform = EntityControl.transform;
             VehicleRigidbody = EntityControl.GetComponent<Rigidbody>();
-            VehicleConstantForce = EntityControl.GetComponent<ConstantForce>();
-            VehicleObjectSync = (VRC.SDK3.Components.VRCObjectSync)VehicleGameObj.GetComponent(typeof(VRC.SDK3.Components.VRCObjectSync));
-            if (VehicleObjectSync == null)
-            {
-                UsingManualSync = true;
-            }
+
+            UsingManualSync = !EntityControl.EntityObjectSync;
 
             localPlayer = Networking.LocalPlayer;
+            InVR = EntityControl.InVR;
             if (localPlayer == null)
             {
                 Piloting = true;
@@ -643,8 +675,7 @@ namespace SaccFlightAndVehicles
             }
             else
             {
-                InVR = localPlayer.IsUserInVR();
-                if (localPlayer.isMaster)
+                if (EntityControl.IsOwner)
                 {
                     if (!UsingManualSync)
                     {
@@ -663,6 +694,8 @@ namespace SaccFlightAndVehicles
             }
             InEditor = EntityControl.InEditor;
             IsOwner = EntityControl.IsOwner;
+
+            EnableLiftSurfaces(IsOwner);
 
             VehicleWheelColliders = VehicleMesh.GetComponentsInChildren<WheelCollider>(true);
             if (VehicleWheelColliders.Length != 0)
@@ -690,41 +723,16 @@ namespace SaccFlightAndVehicles
                 }
             }
 
-
-            if (AutoAdjustValuesToMass)
+            float RBMass = VehicleRigidbody.mass;
+            foreach (WheelCollider wheel in VehicleWheelColliders)
             {
-                //values that should feel the same no matter the weight of the aircraft
-                float RBMass = VehicleRigidbody.mass;
-                ThrottleStrength *= RBMass;
-                PitchStrength *= RBMass;
-                PitchFriction *= RBMass;
-                PitchConstantFriction *= RBMass;
-                YawStrength *= RBMass;
-                YawFriction *= RBMass;
-                YawConstantFriction *= RBMass;
-                RollStrength *= RBMass;
-                RollFriction *= RBMass;
-                RollConstantFriction *= RBMass;
-                VelStraightenStrPitch *= RBMass;
-                VelStraightenStrYaw *= RBMass;
-                YawAoaRollForceMulti *= RBMass;
-                PitchAoaPitchForceMulti *= RBMass;
-                Lift *= RBMass;
-                MaxLift *= RBMass;
-                VelLiftMax *= RBMass;
-                AdverseRoll *= RBMass;
-                AdverseYaw *= RBMass;
-                GroundEffectLiftMax *= RBMass;
-                foreach (WheelCollider wheel in VehicleWheelColliders)
-                {
-                    wheel.mass *= RBMass;
-                    JointSpring SusiSpring = wheel.suspensionSpring;
-                    SusiSpring.spring *= RBMass;
-                    SusiSpring.damper *= RBMass;
-                    wheel.suspensionSpring = SusiSpring;
-                }
+                wheel.mass *= RBMass;
+                JointSpring SusiSpring = wheel.suspensionSpring;
+                SusiSpring.spring *= RBMass;
+                SusiSpring.damper *= RBMass;
+                wheel.suspensionSpring = SusiSpring;
             }
-            OutsideVehicleLayer = VehicleMesh.gameObject.layer;//get the layer of the vehicle as set by the world creator
+
             VehicleAnimator = EntityControl.GetComponent<Animator>();
 
             FullHealth = Health;
@@ -795,46 +803,26 @@ namespace SaccFlightAndVehicles
             }
             if (!ControlsRoot)
             { ControlsRoot = VehicleTransform; }
+
+            if (ExplodeHealth >= 0) { ExplodeHealth = -0.0001f; }// /0
+
+            SetupGCalcValues();
         }
 
         //==AircraftInspector==
         public void ReAdjustValues()
         {
-            if (AutoAdjustValuesToMass)
+            float RBMass = VehicleRigidbody.mass;
+            for (int wheelIndex = 0; wheelIndex < VehicleWheelColliders.Length; wheelIndex++)
             {
-                //values that should feel the same no matter the weight of the aircraft
-                float RBMass = VehicleRigidbody.mass;
-                ThrottleStrength *= RBMass;
-                PitchStrength *= RBMass;
-                PitchFriction *= RBMass;
-                PitchConstantFriction *= RBMass;
-                YawStrength *= RBMass;
-                YawFriction *= RBMass;
-                YawConstantFriction *= RBMass;
-                RollStrength *= RBMass;
-                RollFriction *= RBMass;
-                RollConstantFriction *= RBMass;
-                VelStraightenStrPitch *= RBMass;
-                VelStraightenStrYaw *= RBMass;
-                YawAoaRollForceMulti *= RBMass;
-                PitchAoaPitchForceMulti *= RBMass;
-                Lift *= RBMass;
-                MaxLift *= RBMass;
-                VelLiftMax *= RBMass;
-                AdverseRoll *= RBMass;
-                AdverseYaw *= RBMass;
-                GroundEffectLiftMax *= RBMass;
-                for (int wheelIndex = 0; wheelIndex < VehicleWheelColliders.Length; wheelIndex++)
-                {
-                    WheelCollider wheel = VehicleWheelColliders[wheelIndex];
-                    wheel.mass = initWheelMass[wheelIndex] * RBMass;
-                    JointSpring SusiSpring = wheel.suspensionSpring;
-                    SusiSpring.spring = initSuspensionSpring[wheelIndex] * RBMass;
-                    SusiSpring.damper = initSuspensionDamper[wheelIndex] * RBMass;
-                    wheel.suspensionSpring = SusiSpring;
-
-                }
+                WheelCollider wheel = VehicleWheelColliders[wheelIndex];
+                wheel.mass = initWheelMass[wheelIndex] * RBMass;
+                JointSpring SusiSpring = wheel.suspensionSpring;
+                SusiSpring.spring = initSuspensionSpring[wheelIndex] * RBMass;
+                SusiSpring.damper = initSuspensionDamper[wheelIndex] * RBMass;
+                wheel.suspensionSpring = SusiSpring;
             }
+
             FullHealth = Health;
             FullFuel = Fuel;
 
@@ -882,7 +870,7 @@ namespace SaccFlightAndVehicles
             VTOLAngle = VTOLAngleInput = VTOLDefaultValue;
             VTOLAngleDegrees = VTOLMinAngle + (vtolangledif * VTOLAngle);
 
-            TakeOff(); //GroundedLastFrame‚È‚Ç‚ðƒŠƒZƒbƒg‚·‚é
+            TakeOff(); //GroundedLastFrameãªã©ã‚’ãƒªã‚»ãƒƒãƒˆã™ã‚‹
             DisableGroundDetection_ = 0;
             if (GroundDetectorRayDistance == 0 || !GroundDetector)
             { DisableGroundDetection_++; }
@@ -893,29 +881,55 @@ namespace SaccFlightAndVehicles
             {
                 TaxiFullTurningSpeedDivider = 1 / TaxiFullTurningSpeed;
             }
+
+            if (ExplodeHealth >= 0) { ExplodeHealth = -0.0001f; }// /0
         }
         //==AircraftInspector==
 
+        public void SetupGCalcValues()
+        {
+            NumFUinAvgTime = (int)(GsAveragingTime / Time.fixedDeltaTime);
+            FrameGs = new Vector3[NumFUinAvgTime];
+            Gs_all = Vector3.zero;
+        }
         private void LateUpdate()
         {
             float DeltaTime = Time.deltaTime;
             if (IsOwner)//works in editor or ingame
             {
-                if (!EntityControl._dead)
+                bool dead = EntityControl.dead;
+                if (!wrecked && !dead)
                 {
+                    float thisGDMG = GDamageToTake;
                     //G/crash Damage
                     if (GDamageToTake > 0)
                     {
                         Health -= GDamageToTake * .01f * GDamage;//take damage of GDamage per second per G above MaxGs
                         GDamageToTake = 0;
                     }
-                    if (Health <= 0f)//vehicle is ded
+                    if (Health <= 0f)
                     {
-                        SendCustomNetworkEvent(VRC.Udon.Common.Interfaces.NetworkEventTarget.All, nameof(Explode));
-                        return;
+                        if (Piloting)
+                        { EntityControl.SendEventToExtensions("SFEXT_O_Suicide"); }
+                        EntityControl.SendCustomNetworkEvent(VRC.Udon.Common.Interfaces.NetworkEventTarget.All, "SetWrecked");
                     }
                 }
-                else { GDamageToTake = 0; }
+                else if (!dead)
+                {
+                    if (GDamageToTake > 0)
+                    {
+                        Health -= GDamageToTake * .01f * GDamage;//take damage of GDamage per second per G above MaxGs
+                        GDamageToTake = 0;
+                    }
+                    if (Health < ExplodeHealth)
+                    {
+                        NetworkExplode();
+                    }
+                }
+                else
+                {
+                    GDamageToTake = 0;
+                }
 
                 if (Floating)
                 {
@@ -951,10 +965,8 @@ namespace SaccFlightAndVehicles
 
                 //synced variables because rigidbody values aren't accessable by non-owner players
                 CurrentVel = VehicleRigidbody.velocity;//CurrentVel is set by SAV_SyncScript for non owners
-                Speed = CurrentVel.magnitude;
                 if (Piloting)
                 {
-                    WindAndAoA();
                     DoRepeatingWorld();
 
                     if (!_DisablePhysicsAndInputs)
@@ -1133,10 +1145,10 @@ namespace SaccFlightAndVehicles
                             }
                             float ThrottleDifference = ThrottleZeroPoint - HandThrottleAxis;
                             ThrottleDifference *= ThrottleSensitivity;
-                            bool VTOLandAB_Disallowed = (!VTOLAllowAfterburner && VTOLAngle != 0);/*don't allow VTOL AB disabled vehicles, false if attemping to*/
-
+                            // check if VTOLING and VTOL+AB is not allowed OR if reversing and reverse+AB is not allowed 
+                            bool AB_Disallowed = (!VTOLAllowAfterburner && VTOLAngleDegrees > EnterVTOLEvent_Angle) || (!ReverseThrustAllowAfterburner && _InvertThrust);
                             //Detent function to prevent you going into afterburner by accident (bit of extra force required to turn on AB (actually hand speed))
-                            if (((HandDistanceZLastFrame - HandThrottleAxis) * ThrottleSensitivity > .05f)/*detent overcome*/ && !VTOLandAB_Disallowed && Fuel > LowFuel || ((PlayerThrottle > ThrottleAfterburnerPoint/*already in afterburner*/&& !VTOLandAB_Disallowed) || !HasAfterburner))
+                            if (((HandDistanceZLastFrame - HandThrottleAxis) * ThrottleSensitivity > .05f)/*detent overcome*/ && !AB_Disallowed && Fuel > LowFuel || ((PlayerThrottle > ThrottleAfterburnerPoint/*already in afterburner*/&& !AB_Disallowed) || !HasAfterburner))
                             {
                                 PlayerThrottle = Mathf.Clamp(TempThrottle + ThrottleDifference, 0, 1);
                             }
@@ -1169,8 +1181,9 @@ namespace SaccFlightAndVehicles
                             float TaxiingStillMulti = 1;
                             if (DisallowTaxiRotationWhileStill)
                             { TaxiingStillMulti = Mathf.Min(Speed * TaxiFullTurningSpeedDivider, 1); }
-                            Taxiinglerper = Mathf.Lerp(Taxiinglerper, RotationInputs.y * TaxiRotationSpeed * Time.smoothDeltaTime * TaxiingStillMulti, TaxiRotationResponse * DeltaTime);
-                            VehicleTransform.Rotate(Vector3.up, Taxiinglerper);
+                            Taxiinglerper = Mathf.Lerp(Taxiinglerper, RotationInputs.y * TaxiRotationSpeed * Time.smoothDeltaTime * TaxiingStillMulti, 1 - Mathf.Pow(0.5f, TaxiRotationResponse * DeltaTime));
+                            VehicleTransform.Rotate(VehicleTransform.up, Taxiinglerper);
+                            VehicleRigidbody.rotation = VehicleTransform.rotation;//Unity 2022.3.6f1 bug workaround
 
                             StillWindMulti = Mathf.Min(Speed * .1f, 1);
                             ThrustVecGrounded = 0;
@@ -1182,16 +1195,33 @@ namespace SaccFlightAndVehicles
                             Taxiinglerper = 0;
                         }
                         //keyboard control for afterburner
-                        if (Input.GetKeyDown(AfterBurnerKey) && HasAfterburner && (VTOLAngleDegrees < EnterVTOLEvent_Angle || VTOLAllowAfterburner))
+                        if (Input.GetKeyDown(AfterBurnerKey))
                         {
-                            if (AfterburnerOn)
-                            { PlayerThrottle = ThrottleAfterburnerPoint; }
-                            else
+                            if (HasAfterburner)
+                            {
+                                if ((VTOLAngleDegrees < EnterVTOLEvent_Angle || VTOLAllowAfterburner) && (ReverseThrustAllowAfterburner || !_InvertThrust))
+                                {
+                                    if (PlayerThrottle == 1)
+                                    { PlayerThrottle = ThrottleAfterburnerPoint; }
+                                    else
+                                    { PlayerThrottle = 1; }
+                                }
+                                else
+                                {
+                                    if (PlayerThrottle == ThrottleAfterburnerPoint)
+                                    { PlayerThrottle = 0; }
+                                    else
+                                    { PlayerThrottle = ThrottleAfterburnerPoint; }
+                                }
+                            }
+                            else if (PlayerThrottle < 1)
                             { PlayerThrottle = 1; }
+                            else
+                            { PlayerThrottle = 0; }
                         }
                         if (_ThrottleOverridden)
                         {
-                            ThrottleInput = PlayerThrottle = ThrottleOverride;
+                            //handled in FixedUpdate()
                         }
                         else//if cruise control disabled, use inputs
                         {
@@ -1212,9 +1242,9 @@ namespace SaccFlightAndVehicles
                         }
                         FuelEvents();
 
-                        if (_JoystickOverridden)//joystick override enabled, and player not holding joystick
+                        if (_JoystickOverridden)
                         {
-                            RotationInputs = JoystickOverride;
+                            //handled in FixedUpdate()
                         }
                         else//joystick override disabled, player has control
                         {
@@ -1260,14 +1290,13 @@ namespace SaccFlightAndVehicles
                             RotationInputs.y = Mathf.Clamp(Qi + Ei + VRJoystickPos.y, -1, 1) * Limits;
                             //roll isn't subject to flight limits
                             RotationInputs.z = Mathf.Clamp(((VRJoystickPos.z + Ai + Di + lefti + righti) * -1), -1, 1);
+                            SetRotInputs();
                         }
 
                         //ability to adjust input to be more precise at low amounts. 'exponant'
                         /* RotationInputs.x = RotationInputs.x > 0 ? Mathf.Pow(RotationInputs.x, StickInputPower) : -Mathf.Pow(Mathf.Abs(RotationInputs.x), StickInputPower);
                         RotationInputs.y = RotationInputs.y > 0 ? Mathf.Pow(RotationInputs.y, StickInputPower) : -Mathf.Pow(Mathf.Abs(RotationInputs.y), StickInputPower);
                         RotationInputs.z = RotationInputs.z > 0 ? Mathf.Pow(RotationInputs.z, StickInputPower) : -Mathf.Pow(Mathf.Abs(RotationInputs.z), StickInputPower); */
-
-                        SetRotInputs();
 
                         if (VTOLenabled)
                         {
@@ -1302,14 +1331,6 @@ namespace SaccFlightAndVehicles
                 }
                 else
                 {
-                    if (Speed > .01f)
-                    {
-                        WindAndAoA();
-                    }
-                    else if (!Asleep && GroundedLastFrame && !KeepAwake)
-                    {
-                        FallAsleep();
-                    }
                     if (Taxiing)
                     {
                         StillWindMulti = Mathf.Min(Speed * .1f, 1);
@@ -1323,35 +1344,73 @@ namespace SaccFlightAndVehicles
                         { ThrottleInput = PlayerThrottle = ThrottleOverride; }
                         FuelEvents();
                     }
+                    DoRepeatingWorld();
+                }
+                SoundBarrier = (1 - Mathf.Clamp(Mathf.Abs(Speed - 343) / SoundBarrierWidth, 0, 1)) * SoundBarrierStrength;
+            }
+            else//non-owners need to know these values
+            {
+                Speed = AirSpeed = CurrentVel.magnitude;//wind speed is local anyway, so just use ground speed for non-owners
+                                                        //AirVel = VehicleRigidbody.velocity - Wind;//wind isn't synced so this will be wrong
+                                                        //AirSpeed = AirVel.magnitude;
+            }
+        }
+        private void FixedUpdate()
+        {
+
+#if UNITY_EDITOR
+            if (SetVel)
+            {
+                VehicleRigidbody.velocity = VelToSet;
+            }
+#endif
+            if (IsOwner)
+            {
+                float DeltaTime = Time.fixedDeltaTime;
+                Speed = VehicleRigidbody.velocity.magnitude;
+                if (Piloting)
+                {
+                    WindAndAoA();
+                }
+                else if (Speed > .01f)
+                {
+                    WindAndAoA();
+                }
+                else if (!Asleep && GroundedLastFrame && !KeepAwake)
+                {
+                    FallAsleep();
+                }
+                if (!_DisablePhysicsAndInputs)
+                {
+                    if (_ThrottleOverridden)
+                    {
+                        ThrottleInput = PlayerThrottle = ThrottleOverride;
+                    }
                     if (_JoystickOverridden)
                     {
                         RotationInputs = JoystickOverride;
                         SetRotInputs();
                     }
-                    DoRepeatingWorld();
-                }
-
-                if (!_DisablePhysicsAndInputs)
-                {
                     //Lerp the inputs for 'engine response', throttle decrease response is slower than increase (EngineSpoolDownSpeedMulti)
                     if (_EngineOn)
                     {
                         if (EngineOutput < ThrottleInput)
-                        { EngineOutput = Mathf.Lerp(EngineOutput, ThrottleInput, AccelerationResponse * DeltaTime); }
+                        { EngineOutput = Mathf.Lerp(EngineOutput, ThrottleInput, 1 - Mathf.Pow(0.5f, AccelerationResponse * DeltaTime)); }
                         else
-                        { EngineOutput = Mathf.Lerp(EngineOutput, ThrottleInput, AccelerationResponse * EngineSpoolDownSpeedMulti * DeltaTime); }
+                        { EngineOutput = Mathf.Lerp(EngineOutput, ThrottleInput, 1 - Mathf.Pow(0.5f, AccelerationResponse * EngineSpoolDownSpeedMulti * DeltaTime)); }
                     }
                     else
                     {
-                        EngineOutput = Mathf.Lerp(EngineOutput, 0, AccelerationResponse * EngineSpoolDownSpeedMulti * DeltaTime);
+                        EngineOutput = Mathf.Lerp(EngineOutput, 0, 1 - Mathf.Pow(0.5f, AccelerationResponse * EngineSpoolDownSpeedMulti * DeltaTime));
                     }
                     float sidespeed = 0;
                     float downspeed = 0;
                     float SpeedLiftFactor = 0;
+                    float SpeedLiftFactor_Lift = 0;
                     float SpeedLiftFactor_pd = 0;
                     float rotlift = 0;
 
-                    if (!Asleep)//optimization
+                    if (!Asleep)
                     {
                         //used to create air resistance for updown and sideways if your movement direction is in those directions
                         //to add physics to plane's yaw and pitch, accel angvel towards velocity, and add force to the plane
@@ -1359,49 +1418,54 @@ namespace SaccFlightAndVehicles
                         sidespeed = Vector3.Dot(AirVel, VehicleTransform.right);
                         downspeed = -Vector3.Dot(AirVel, VehicleTransform.up);
                         PitchDown = downspeed < 0;//air is hitting plane from above?
-                        SpeedLiftFactor = Mathf.Min(AirSpeed * AirSpeed * Lift, MaxLift);
-                        SpeedLiftFactor_pd = Mathf.Min(AirSpeed * AirSpeed * Lift, PitchDown ? MaxLift * PitchDownLiftMulti : MaxLift);
+                        SpeedLiftFactor = AirSpeed * AirSpeed;
+                        SpeedLiftFactor_Lift = Mathf.Min(SpeedLiftFactor * Lift, MaxLift);
 
                         rotlift = Mathf.Min(AirSpeed / RotMultiMaxSpeed, 1);//using a simple linear curve for increasing control as you move faster
 
                         //thrust vectoring airplanes have a minimum rotation control
                         //AoALiftPitch is used here before being modified in the next block of code on purpose
                         float minlifttemp = rotlift * Mathf.Min(AoALiftPitch, AoALiftYaw);
-                        pitch *= Mathf.Max(PitchThrustVecMulti * ThrustVecGrounded, minlifttemp);
-                        yaw *= Mathf.Max(YawThrustVecMulti * ThrustVecGrounded, minlifttemp);
-                        roll *= Mathf.Max(RollThrustVecMulti * ThrustVecGrounded, minlifttemp);
+
+                        float pitchnew = pitch * Mathf.Max(PitchThrustVecMulti * ThrustVecGrounded, minlifttemp);
+                        float yawnew = yaw * Mathf.Max(YawThrustVecMulti * ThrustVecGrounded, minlifttemp);
+                        float rollnew = roll * Mathf.Max(RollThrustVecMulti * ThrustVecGrounded, minlifttemp);
+
+                        //Lerp the inputs for 'rotation response'   
+                        LerpedRoll = Mathf.Lerp(LerpedRoll, rollnew, 1 - Mathf.Pow(0.5f, RollResponse * DeltaTime));
+                        LerpedPitch = Mathf.Lerp(LerpedPitch, pitchnew, 1 - Mathf.Pow(0.5f, PitchResponse * DeltaTime));
+                        LerpedYaw = Mathf.Lerp(LerpedYaw, yawnew, 1 - Mathf.Pow(0.5f, YawResponse * DeltaTime));
 
                         //rotation inputs are done, now we can set the minimum lift/drag when at high aoa, this should be higher than 0 because if it's 0 you will have 0 drag when at 90 degree AoA.
                         AoALiftPitch = Mathf.Clamp(AoALiftPitch, HighPitchAoaMinLift, 1);
                         AoALiftYaw = Mathf.Clamp(AoALiftYaw, HighYawAoaMinLift, 1);
                         AoALift_Min = Mathf.Min(AoALiftYaw, AoALiftPitch);
 
-                        //Lerp the inputs for 'rotation response'
-                        LerpedRoll = Mathf.Lerp(LerpedRoll, roll, RollResponse * DeltaTime);
-                        LerpedPitch = Mathf.Lerp(LerpedPitch, pitch, PitchResponse * DeltaTime);
-                        LerpedYaw = Mathf.Lerp(LerpedYaw, yaw, YawResponse * DeltaTime);
-                    }
-                    else
-                    {
-                        VelLift = pitch = yaw = roll = 0;
-                    }
-
-                    if ((!Asleep) && !_OverrideConstantForce)
-                    {
-                        //Create a Vector3 Containing the thrust, and rotate and adjust strength based on VTOL value
-                        //engine output is multiplied so that max throttle without afterburner is max strength (unrelated to vtol)
-                        Vector3 FinalInputAcc = new Vector3(-sidespeed * SidewaysLift * SpeedLiftFactor * AoALiftYaw,// X Sideways
-                                ((PitchDown ? downspeed * PitchDownLiftMulti : downspeed) * ExtraLift * SpeedLiftFactor_pd * AoALiftPitch),// Y Up
-                                0);//Z Forward
-
                         float GroundEffectAndVelLift = 0;
 
-                        Vector2 Outputs = UnpackThrottles(EngineOutput);
+                        Vector2 Outputs = UnpackThrottles(Mathf.Abs(EngineOutput));
+
+                        if (_InvertThrust)
+                        {
+                            if (DroneMode)
+                            {
+                                PitchDown = !PitchDown;
+                            }
+                            Outputs *= InverThrustMultiplier;
+                        }
+
                         float Thrust = (Mathf.Min(Outputs.x)//Throttle
                         * ThrottleStrength
                         + Mathf.Max(Outputs.y, 0)//Afterburner throttle
                         * ThrottleStrengthAB);
 
+                        SpeedLiftFactor_pd = Mathf.Min(AirSpeed * AirSpeed * Lift, PitchDown ? MaxLift * PitchDownLiftMulti : MaxLift);
+
+                        //Create a Vector3 Containing the thrust, and rotate and adjust strength based on VTOL value
+                        //engine output is multiplied so that max throttle without afterburner is max strength (unrelated to vtol)
+                        Vector3 FinalInputAcc = new Vector3(-sidespeed * SidewaysLift * SpeedLiftFactor_Lift * AoALiftYaw,// X Sideways
+                                ((PitchDown ? downspeed * PitchDownLiftMulti : downspeed) * ExtraLift * SpeedLiftFactor_pd * AoALiftPitch),// Y Up
+                                0);//Z Forward
 
                         if (VTOLenabled)
                         {
@@ -1432,7 +1496,7 @@ namespace SaccFlightAndVehicles
                             VTOLInputAcc *= GroundEffectAndVelLift;
 
                             //Add Airplane Ground Effect
-                            GroundEffectAndVelLift = AoALift_Min * GroundEffect(false, GroundEffectEmpty.position, -VehicleTransform.up, GroundEffectStrength, SpeedLiftFactor);
+                            GroundEffectAndVelLift = AoALift_Min * GroundEffect(false, GroundEffectEmpty.position, -VehicleTransform.up, GroundEffectStrength / VehicleRigidbody.mass, SpeedLiftFactor);
                             //add lift and thrust
 
                             FinalInputAcc += VTOLInputAcc;
@@ -1441,14 +1505,14 @@ namespace SaccFlightAndVehicles
                         }
                         else//Simpler version for non-VTOL craft
                         {
-                            GroundEffectAndVelLift = AoALift_Min * GroundEffect(false, GroundEffectEmpty.position, -VehicleTransform.up, GroundEffectStrength, SpeedLiftFactor);
+                            GroundEffectAndVelLift = AoALift_Min * GroundEffect(false, GroundEffectEmpty.position, -VehicleTransform.up, GroundEffectStrength / VehicleRigidbody.mass, SpeedLiftFactor);
 
                             FinalInputAcc.y += GroundEffectAndVelLift;
                             FinalInputAcc.z += Thrust;
                             FinalInputAcc *= Atmosphere;
                         }
 
-                        float outputdif = (EngineOutput - EngineOutputLastFrame) / DeltaTime;//divide by deltatime to counter the *deltatime added by the constantforce
+                        float outputdif = (EngineOutput - EngineOutputLastFrame) / DeltaTime;
                         float ADVYaw = outputdif * AdverseYaw;
                         float ADVRoll = (1 - rotlift) * AdverseRoll * EngineOutput;
                         EngineOutputLastFrame = EngineOutput;
@@ -1468,12 +1532,33 @@ namespace SaccFlightAndVehicles
                             (((-localAngularVelocity.y * YawFriction * rotlift * AoALiftPitch * AoALiftYaw) + ADVYaw) - (localAngularVelocity.y * YawConstantFriction)) * Atmosphere,// Y Yaw
                                 ((LerpedRoll + yawaoarollforce + (-localAngularVelocity.z * RollFriction * rotlift * AoALiftPitch * AoALiftYaw) + ADVRoll) - (localAngularVelocity.z * RollConstantFriction)) * Atmosphere);// Z Roll
 
-                        //create values for use in fixedupdate (control input and straightening forces)
-                        Pitching = ((((VehicleTransform.up * LerpedPitch) + (VehicleTransform.up * downspeed * VelStraightenStrPitch * AoALiftPitch * rotlift)) * Atmosphere));
-                        Yawing = ((((VehicleTransform.right * LerpedYaw) + (VehicleTransform.right * -sidespeed * VelStraightenStrYaw * AoALiftYaw * rotlift)) * Atmosphere));
+                        if (PitchMoment)
+                        { Pitching = ((((VehicleTransform.up * LerpedPitch) + (VehicleTransform.up * downspeed * VelStraightenStrPitch * AoALiftPitch * rotlift)) * Atmosphere)); }
+                        else
+                        {
+                            Pitching =
+                            new Vector3(
+                                ((((LerpedPitch) + (downspeed * VelStraightenStrPitch * AoALiftPitch * rotlift)) * Atmosphere))
+                                , 0, 0);
+                        }
+                        if (YawMoment)
+                        { Yawing = ((((VehicleTransform.right * LerpedYaw) + (VehicleTransform.right * -sidespeed * VelStraightenStrYaw * AoALiftYaw * rotlift)) * Atmosphere)); }
+                        else
+                        {
+                            Yawing =
+                            new Vector3(
+                                0,
+                                ((((LerpedYaw) + (-sidespeed * VelStraightenStrYaw * AoALiftYaw * rotlift)) * Atmosphere))
+                                , 0);
+                        }
 
-                        VehicleConstantForce.relativeForce = FinalInputAcc;
-                        if (HasWheelColliders)
+                        if (DroneMode)
+                        {
+                            FinalInputAcc.y *= _EngineOn ? ThrottleInput : 0;
+                        }
+
+                        VehicleForce = FinalInputAcc;
+                        if (HasWheelColliders && WheelSuspension)
                         {
                             float suspensionDownCof = FinalInputAcc.y / VehicleRigidbody.mass / 9.81f;
                             suspensionDownCof = Mathf.Clamp(suspensionDownCof, 0, 1);
@@ -1487,50 +1572,84 @@ namespace SaccFlightAndVehicles
                             }
                         }
 
-                        VehicleConstantForce.relativeTorque = FinalInputRot;
+                        VehicleTorque = FinalInputRot;
                     }
                     else
                     {
-                        VehicleConstantForce.relativeForce = CFRelativeForceOverride;
-                        VehicleConstantForce.relativeTorque = CFRelativeTorqueOverride;
+                        VelLift = pitch = yaw = roll = 0;
                     }
                 }
 
-                SoundBarrier = (-Mathf.Clamp(Mathf.Abs(Speed - 343) / SoundBarrierWidth, 0, 1) + 1) * SoundBarrierStrength;
-            }
-            else//non-owners need to know these values
-            {
-                Speed = AirSpeed = CurrentVel.magnitude;//wind speed is local anyway, so just use ground speed for non-owners
-                                                        //AirVel = VehicleRigidbody.velocity - Wind;//wind isn't synced so this will be wrong
-                                                        //AirSpeed = AirVel.magnitude;
-            }
-        }
-        private void FixedUpdate()
-        {
-            if (IsOwner && !Asleep)
-            {
-                float DeltaTime = Time.fixedDeltaTime;
-                //lerp velocity toward 0 to simulate air friction
+                if (Asleep) { return; }
+
                 Vector3 VehicleVel = VehicleRigidbody.velocity;
-                VehicleRigidbody.velocity = Vector3.Lerp(VehicleVel, FinalWind * StillWindMulti * Atmosphere, ((((AirFriction + SoundBarrier) * ExtraDrag)) * 90) * DeltaTime);
-                //apply pitching using pitch moment
-                VehicleRigidbody.AddForceAtPosition(Pitching, PitchMoment.position, ForceMode.Force);//deltatime is built into ForceMode.Force
-                                                                                                     //apply yawing using yaw moment
-                VehicleRigidbody.AddForceAtPosition(Yawing, YawMoment.position, ForceMode.Force);
+                if (!_DisablePhysicsApplication)
+                {
+                    // I tried changing ForceMode to Acceleration but for some reason the results are different,
+                    // so until I work out why, just multiply forces by mass
+                    float RBMass = VehicleRigidbody.mass;
+                    // lerp velocity toward zero/windspeed for 'air friction'
+                    VehicleRigidbody.velocity = Vector3.Lerp(VehicleVel, FinalWind * StillWindMulti * Atmosphere, 1 - Mathf.Pow(0.5f, (AirFriction + SoundBarrier) * ExtraDrag * 90 * DeltaTime));
+                    if (wrecked)
+                    {
+                        float negHealthPc = -Health / -ExplodeHealth;
+                        VehicleRigidbody.AddRelativeTorque(wreckedSpinForce * negHealthPc * /* StillWintMulti requires EngineOn + Grounded, so: */ Mathf.Min(AirSpeed * .1f, 1), ForceMode.Acceleration);
+                        VehicleRigidbody.AddRelativeForce(VehicleForce * (1 - negHealthPc) * RBMass, ForceMode.Force);
+                    }
+                    else
+                    { VehicleRigidbody.AddRelativeForce(VehicleForce * RBMass, ForceMode.Force); }
+                    VehicleRigidbody.AddRelativeTorque(VehicleTorque * RBMass, ForceMode.Force);
+                    //apply pitching using pitch moment
+                    if (PitchMoment)
+                    { VehicleRigidbody.AddForceAtPosition(Pitching * RBMass, PitchMoment.position, ForceMode.Force); }
+                    else
+                    { VehicleRigidbody.AddRelativeTorque(Pitching * RBMass, ForceMode.Force); }
+                    //deltatime is built into ForceMode.Force
+                    //apply yawing using yaw moment
+                    if (YawMoment)
+                    { VehicleRigidbody.AddForceAtPosition(Yawing * RBMass, YawMoment.position, ForceMode.Force); }
+                    else
+                    { VehicleRigidbody.AddRelativeTorque(-Yawing * RBMass, ForceMode.Force); }
+                }
                 //calc Gs
-                float gravity = -Physics.gravity.y * DeltaTime;
-                LastFrameVel.y -= gravity; //add gravity
-
-                Gs3 = VehicleTransform.InverseTransformDirection(VehicleVel - LastFrameVel);
-                VertGs = Gs3.y / gravity;
-
-                AllGs = Vector3.Magnitude(Gs3) / gravity;
+                float gravity = 9.81f * DeltaTime;
+                LastFrameVel.y -= gravity;
+                Vector3 Gs3 = VehicleTransform.InverseTransformDirection(VehicleVel - LastFrameVel);
+                Vector3 thisFrameGs = Gs3 / gravity;
+                Gs_all -= FrameGs[GsFrameCheck];
+                Gs_all += thisFrameGs;
+                FrameGs[GsFrameCheck] = thisFrameGs;
+                GsFrameCheck++;
+                if (GsFrameCheck >= NumFUinAvgTime) { GsFrameCheck = 0; }
+                VertGs = Gs_all.y / NumFUinAvgTime;
+                AllGs = Gs_all.magnitude / NumFUinAvgTime;
                 GDamageToTake += Mathf.Max((AllGs - MaxGs), 0);
-
                 LastFrameVel = VehicleVel;
             }
         }
-        public void Explode()//all the things players see happen when the vehicle explodes
+        [System.NonSerialized] public float GsAveragingTime = .1f;
+        public int NumFUinAvgTime = 1;
+        public Vector3 Gs_all;
+        private Vector3[] FrameGs;
+        private int GsFrameCheck;
+        public void NetworkExplode()
+        {
+            SendCustomNetworkEvent(VRC.Udon.Common.Interfaces.NetworkEventTarget.All, nameof(Explode));
+        }
+        private bool wrecked = false;
+        private Vector3 wreckedSpinForce;
+        public void SFEXT_G_Wrecked()
+        {
+            if (wrecked) { return; }
+            SetEngineOff();
+            wreckedSpinForce = new Vector3(Random.Range(-2, 2), Random.Range(-3, 3), Random.Range(-4, 4));
+            wrecked = true;
+        }
+        public void SFEXT_G_NotWrecked()
+        {
+            wrecked = false;
+        }
+        public void Explode()
         {
             if (EntityControl._dead) { return; }//can happen with prediction enabled if two people kill something at the same time
             FallAsleep();
@@ -1558,8 +1677,8 @@ namespace SaccFlightAndVehicles
 
             if (IsOwner)
             {
-                VehicleConstantForce.relativeForce = Vector3.zero;
-                VehicleConstantForce.relativeTorque = Vector3.zero;
+                VehicleForce = Vector3.zero;
+                VehicleTorque = Vector3.zero;
                 VehicleRigidbody.velocity = Vector3.zero;
                 VehicleRigidbody.angularVelocity = Vector3.zero;
                 if (!UsingManualSync)
@@ -1606,27 +1725,41 @@ namespace SaccFlightAndVehicles
         }
         public void ReAppear()
         {
+            EntityControl.SetWreckedFalse();
             EntityControl.SendEventToExtensions("SFEXT_G_ReAppear");
+            numGrapplesAttached = 0;
             WakeUp();
             if (IsOwner)
             {
-                SendCustomEventDelayedFrames(nameof(SetRespawnPos), 1);//have to do this delayed 1 frame because the ConstantForce gets some mysterious torque when re-enabling colliders or something
+                SetRespawnPos();
             }
         }
         public void SetRespawnPos()
         {
             VehicleRigidbody.drag = 0;
             VehicleRigidbody.angularDrag = 0;
-            VehicleConstantForce.relativeForce = Vector3.zero;
-            VehicleConstantForce.relativeTorque = Vector3.zero;
+            VehicleForce = Vector3.zero;
+            VehicleTorque = Vector3.zero;
             VehicleRigidbody.angularVelocity = Vector3.zero;
             VehicleRigidbody.velocity = Vector3.zero;
             if (InEditor || UsingManualSync)
             {
-                VehicleTransform.localPosition = Spawnposition;
-                VehicleTransform.localRotation = Spawnrotation;
+                VehicleTransform.localPosition = EntityControl.Spawnposition;
+                VehicleTransform.localRotation = EntityControl.Spawnrotation;
+                VehicleRigidbody.position = VehicleTransform.position;
+                VehicleRigidbody.rotation = VehicleTransform.rotation;
             }
-            else { VehicleObjectSync.Respawn(); }
+            else
+            {
+                if (EntityControl.EntityObjectSync) { EntityControl.EntityObjectSync.Respawn(); }
+            }
+            if (EntityControl.RespawnPoint)
+            {
+                VehicleTransform.position = EntityControl.RespawnPoint.position;
+                VehicleTransform.rotation = EntityControl.RespawnPoint.rotation;
+                VehicleRigidbody.position = VehicleTransform.position;
+                VehicleRigidbody.rotation = VehicleTransform.rotation;
+            }
         }
         public void NotDead()
         {
@@ -1637,22 +1770,12 @@ namespace SaccFlightAndVehicles
         {
             PlayerThrottle = 0;//for editor test mode
             EngineOutput = 0;//^
-            VehicleRigidbody.angularVelocity = Vector3.zero;
-            VehicleRigidbody.velocity = Vector3.zero;
             //these could get set after death by lag, probably
             MissilesIncomingHeat = 0;
             MissilesIncomingRadar = 0;
             MissilesIncomingOther = 0;
             Health = FullHealth;
-            if (InEditor || UsingManualSync)
-            {
-                VehicleTransform.localPosition = Spawnposition;
-                VehicleTransform.localRotation = Spawnrotation;
-            }
-            else
-            {
-                VehicleObjectSync.Respawn();
-            }
+            SetRespawnPos();
             EntityControl.SendEventToExtensions("SFEXT_O_MoveToSpawn");
         }
         private void WakeUp()
@@ -1660,6 +1783,7 @@ namespace SaccFlightAndVehicles
             Asleep = false;
             EntityControl.SendEventToExtensions("SFEXT_L_WakeUp");
             VehicleRigidbody.WakeUp();
+            EnableLiftSurfaces(IsOwner);
         }
         private bool KeepAwake = false;
         public void SFEXT_L_KeepAwake() { KeepAwake = true; }
@@ -1673,16 +1797,7 @@ namespace SaccFlightAndVehicles
             GDamageToTake = 0;
             VertGs = 0;
             LastFrameVel = Vector3.zero;
-        }
-        public void SFEXT_L_CoMSet()
-        {
-            if (Initialized)
-            { SetCoMMeshOffset(); }
-        }
-        private void OnEnable()
-        {
-            if (Initialized)
-            { SetCoMMeshOffset(); }
+            EnableLiftSurfaces(false);
         }
         public void SetCoMMeshOffset()
         {
@@ -1695,13 +1810,16 @@ namespace SaccFlightAndVehicles
                 VehicleTransform.GetChild(i).position -= CoMOffset;
             }
             VehicleTransform.position += CoMOffset;
+            VehicleRigidbody.position = VehicleTransform.position;//Unity 2022.3.6f1 bug workaround
             SendCustomEventDelayedSeconds(nameof(SetCoM_ITR), Time.fixedDeltaTime);//this has to be delayed because ?
-            Spawnposition = VehicleTransform.localPosition;
-            Spawnrotation = VehicleTransform.localRotation;
+            EntityControl.Spawnposition = VehicleTransform.localPosition;
+            EntityControl.Spawnrotation = VehicleTransform.localRotation;
         }
         public void SetCoM_ITR()
         {
             VehicleRigidbody.centerOfMass = VehicleTransform.InverseTransformDirection(CenterOfMass.position - VehicleTransform.position);//correct position if scaled
+            EntityControl.CoMSet = true;
+            VehicleRigidbody.inertiaTensor = VehicleRigidbody.inertiaTensor;
             VehicleRigidbody.inertiaTensorRotation = Quaternion.SlerpUnclamped(Quaternion.identity, VehicleRigidbody.inertiaTensorRotation, InertiaTensorRotationMulti);
             if (InvertITRYaw)
             {
@@ -1709,7 +1827,6 @@ namespace SaccFlightAndVehicles
                 ITR.x *= -1;
                 VehicleRigidbody.inertiaTensorRotation = Quaternion.Euler(ITR);
             }
-            VehicleRigidbody.ResetInertiaTensor();
         }
         public void FuelEvents()
         {
@@ -1798,12 +1915,14 @@ namespace SaccFlightAndVehicles
                             Vector3 vehpos = VehicleTransform.position;
                             vehpos.z -= RepeatingWorldDistance * 2;
                             VehicleTransform.position = vehpos;
+                            VehicleRigidbody.position = VehicleTransform.position;
                         }
                         else
                         {
                             Vector3 vehpos = VehicleTransform.position;
                             vehpos.z += RepeatingWorldDistance * 2;
                             VehicleTransform.position = vehpos;
+                            VehicleRigidbody.position = VehicleTransform.position;
                         }
                     }
                 }
@@ -1816,12 +1935,14 @@ namespace SaccFlightAndVehicles
                             Vector3 vehpos = VehicleTransform.position;
                             vehpos.x -= RepeatingWorldDistance * 2;
                             VehicleTransform.position = vehpos;
+                            VehicleRigidbody.position = VehicleTransform.position;
                         }
                         else
                         {
                             Vector3 vehpos = VehicleTransform.position;
                             vehpos.x += RepeatingWorldDistance * 2;
                             VehicleTransform.position = vehpos;
+                            VehicleRigidbody.position = VehicleTransform.position;
                         }
                     }
                 }
@@ -1896,20 +2017,12 @@ namespace SaccFlightAndVehicles
                 SendCustomNetworkEvent(VRC.Udon.Common.Interfaces.NetworkEventTarget.All, nameof(SetEngineOn));
             }
         }
-        public void SFEXT_O_ReSupply()
+        public void SFEXT_G_ReSupply()
         {
-            SendCustomNetworkEvent(VRC.Udon.Common.Interfaces.NetworkEventTarget.All, nameof(ReSupply));
-        }
-        public void ReSupply()
-        {
-            ReSupplied = 0;//used to know if other scripts resupplied
-            if ((Fuel < FullFuel - 10 || Health != FullHealth))
+            if ((Fuel < FullFuel - 10) || (Health != FullHealth))
             {
-                ReSupplied++;//used to only play the sound if we're actually repairing/getting ammo/fuel
+                EntityControl.ReSupplied++;//used to only play the sound if we're actually repairing/getting ammo/fuel
             }
-            EntityControl.SendEventToExtensions("SFEXT_G_ReSupply");//extensions increase the ReSupplied value too
-
-            LastResupplyTime = Time.time;
 
             if (IsOwner)
             {
@@ -1923,38 +2036,60 @@ namespace SaccFlightAndVehicles
                 {
                     SendCustomNetworkEvent(VRC.Udon.Common.Interfaces.NetworkEventTarget.All, nameof(SendNotNoFuel));
                 }
+                if (EntityControl.wrecked && Health > 0)
+                {
+                    SendCustomNetworkEvent(VRC.Udon.Common.Interfaces.NetworkEventTarget.All, nameof(RepairWrecked));
+                }
             }
         }
-        public void SFEXT_O_RespawnButton()//called when using respawn button
+        public void SFEXT_G_RePair()
         {
-            VRCPlayerApi currentOwner = Networking.GetOwner(EntityControl.gameObject);
-            bool BlockedCheck = (currentOwner != null && currentOwner.GetBonePosition(HumanBodyBones.Hips) == Vector3.zero) && Speed > .2f;
-            if (Occupied || EntityControl._dead || BlockedCheck) { return; }
-            Networking.SetOwner(localPlayer, EntityControl.gameObject);
-            SendCustomNetworkEvent(VRC.Udon.Common.Interfaces.NetworkEventTarget.All, nameof(ResetStatus));
-            IsOwner = true;
-            Atmosphere = 1;//vehiclemoving optimization requires this to be here
-                           //synced variables
-            Health = FullHealth;
-            Fuel = FullFuel;
-            EngineOutput = 0;
-            VTOLAngle = VTOLDefaultValue;
-            VTOLAngleInput = VTOLDefaultValue;
-            VTOLAngleDegrees = VTOLMinAngle + (vtolangledif * VTOLAngle);
-            if (InEditor || UsingManualSync)
+            if (Health != FullHealth) { EntityControl.ReSupplied++; }
+            if (IsOwner)
             {
-                VehicleTransform.localPosition = Spawnposition;
-                VehicleTransform.localRotation = Spawnrotation;
-                VehicleRigidbody.velocity = Vector3.zero;
+                Health = Mathf.Min(Health + (FullHealth / RepairTime), FullHealth);
+                if (EntityControl.wrecked && Health > 0)
+                {
+                    SendCustomNetworkEvent(VRC.Udon.Common.Interfaces.NetworkEventTarget.All, nameof(RepairWrecked));
+                }
             }
-            else
-            {
-                VehicleObjectSync.Respawn();
-            }
-            VehicleRigidbody.angularVelocity = Vector3.zero;//editor needs this
         }
-        public void ResetStatus()//called globally when using respawn button
+        public void SFEXT_G_ReFuel()
         {
+            if (Fuel < FullFuel - 10) { EntityControl.ReSupplied++; }
+            if (IsOwner)
+            {
+                Fuel = Mathf.Min(Fuel + (FullFuel / RefuelTime), FullFuel);
+                if (LowFuelLastFrame && Fuel > LowFuel)
+                {
+                    SendCustomNetworkEvent(VRC.Udon.Common.Interfaces.NetworkEventTarget.All, nameof(SendNotLowFuel));
+                }
+                if (NoFuelLastFrame && Fuel > 0)
+                {
+                    SendCustomNetworkEvent(VRC.Udon.Common.Interfaces.NetworkEventTarget.All, nameof(SendNotNoFuel));
+                }
+            }
+        }
+        public void RepairWrecked()
+        {
+            EntityControl.SetWreckedFalse();
+            if (EngineOnOnEnter) { SetEngineOn(); }
+        }
+        public void SFEXT_G_RespawnButton()//called globally when using respawn button
+        {
+            if (IsOwner)
+            {
+                Atmosphere = 1;//vehiclemoving optimization requires this to be here
+                               //synced variables
+                Health = FullHealth;
+                Fuel = FullFuel;
+                EngineOutput = 0;
+                VTOLAngle = VTOLDefaultValue;
+                VTOLAngleInput = VTOLDefaultValue;
+                VTOLAngleDegrees = VTOLMinAngle + (vtolangledif * VTOLAngle);
+                SetRespawnPos();
+            }
+
             if (_EngineOn)
             {
                 SetEngineOff();
@@ -1968,9 +2103,9 @@ namespace SaccFlightAndVehicles
             { SendNotLowFuel(); }
             if (NoFuelLastFrame)
             { SendNotNoFuel(); }
-            EntityControl.SendEventToExtensions("SFEXT_G_RespawnButton");
-            VehicleConstantForce.relativeForce = Vector3.zero;
-            VehicleConstantForce.relativeTorque = Vector3.zero;
+            VehicleForce = Vector3.zero;
+            VehicleTorque = Vector3.zero;
+            EntityControl.SetWreckedFalse();
         }
         public void SFEXT_L_BulletHit()
         {
@@ -1978,50 +2113,38 @@ namespace SaccFlightAndVehicles
             {
                 if (Time.time - LastHitTime > 2)
                 {
-                    PredictedHealth = Health - (BulletDamageTaken * EntityControl.LastHitBulletDamageMulti);
                     LastHitTime = Time.time;//must be updated before sending explode() for checks in explode event to work
-                    if (PredictedHealth <= 0)
+                    PredictedHealth = Health - (BulletDamageTaken * EntityControl.LastHitBulletDamageMulti);
+                    if (!wrecked && PredictedHealth <= 0)
                     {
-                        SendCustomNetworkEvent(VRC.Udon.Common.Interfaces.NetworkEventTarget.All, nameof(Explode));
+                        EntityControl.SendEventToExtensions("SFEXT_O_GunKill");
+                        EntityControl.SendCustomNetworkEvent(VRC.Udon.Common.Interfaces.NetworkEventTarget.All, "SetWrecked");
+                    }
+                    else if (!EntityControl.dead && PredictedHealth < ExplodeHealth)
+                    {
+                        NetworkExplode();
                     }
                 }
                 else
                 {
-                    PredictedHealth -= BulletDamageTaken * EntityControl.LastHitBulletDamageMulti;
                     LastHitTime = Time.time;
-                    if (PredictedHealth <= 0)
+                    PredictedHealth -= BulletDamageTaken * EntityControl.LastHitBulletDamageMulti;
+                    if (!wrecked && PredictedHealth <= 0)
                     {
-                        SendCustomNetworkEvent(VRC.Udon.Common.Interfaces.NetworkEventTarget.All, nameof(Explode));
+                        EntityControl.SendEventToExtensions("SFEXT_O_GunKill");
+                        EntityControl.SendCustomNetworkEvent(VRC.Udon.Common.Interfaces.NetworkEventTarget.All, "SetWrecked");
+                    }
+                    else if (!EntityControl.dead && PredictedHealth < ExplodeHealth)
+                    {
+                        NetworkExplode();
                     }
                 }
             }
         }
         public void SFEXT_G_BulletHit()
         {
-            if (!EntityControl._dead)
-            {
-                if (IsOwner)
-                {
-                    Health -= BulletDamageTaken * EntityControl.LastHitBulletDamageMulti;
-                    if (PredictDamage && Health <= 0)//the attacker calls the explode function in this case
-                    {
-                        Health = 0.0911f;
-                        //if two people attacked us, and neither predicted they killed us but we took enough damage to die, we must still die.
-                        SendCustomEventDelayedSeconds(nameof(CheckLaggyKilled), .25f);//give enough time for the explode event to happen if they did predict we died, otherwise do it ourself
-                    }
-                }
-            }
-        }
-        public void CheckLaggyKilled()
-        {
-            if (!EntityControl._dead)
-            {
-                //Check if we still have the amount of health set to not send explode when killed, and if we do send explode
-                if (Health == 0.0911f)
-                {
-                    SendCustomNetworkEvent(VRC.Udon.Common.Interfaces.NetworkEventTarget.All, nameof(Explode));
-                }
-            }
+            if (!IsOwner) { return; }
+            Health -= BulletDamageTaken * EntityControl.LastHitBulletDamageMulti;
         }
         private float LastCollisionTime;
         private float MinCollisionSoundDelay = 0.1f;
@@ -2029,36 +2152,54 @@ namespace SaccFlightAndVehicles
         {
             if (!IsOwner) { return; }
             if (Asleep) { WakeUp(); }
-            LastCollisionTime = Time.time;
-            if (Time.time - LastCollisionTime < MinCollisionSoundDelay)
+            if (wrecked)
             {
-                LastCollisionTime = Time.time;
-                Collision col = EntityControl.LastCollisionEnter;
-                if (col == null) { return; }
-                float colmag = col.impulse.magnitude / VehicleRigidbody.mass;
+                NetworkExplode();
+            }
+            Collision col = EntityControl.LastCollisionEnter;
+            if (col == null) { return; }
+            float colmag = col.impulse.magnitude / VehicleRigidbody.mass;
+            float colmag_dmg = colmag;
+            if (colmag_dmg > Crash_Damage_Speed)
+            {
+                if (colmag_dmg < Crash_Death_Speed)
+                {
+                    float dif = Crash_Death_Speed - Crash_Damage_Speed;
+                    float newcolT = (colmag_dmg - Crash_Damage_Speed) / dif;
+                    colmag_dmg = Mathf.Lerp(0, Crash_Death_Speed, newcolT);
+                }
+                float thisGDMG = (colmag_dmg / Crash_Death_Speed) * FullHealth;
+                Health -= thisGDMG;
+
+                if (Health <= 0 && thisGDMG > FullHealth * 0.5f)
+                { NetworkExplode(); }
+            }
+            if (Time.time - LastCollisionTime > MinCollisionSoundDelay)
+            {
                 if (colmag > BigCrashSpeed)
                 {
-                    SendCustomNetworkEvent(VRC.Udon.Common.Interfaces.NetworkEventTarget.All, nameof(SendBigCrash));
+                    SendCustomNetworkEvent(VRC.Udon.Common.Interfaces.NetworkEventTarget.All, nameof(BigCrash));
                 }
                 else if (colmag > MediumCrashSpeed)
                 {
-                    SendCustomNetworkEvent(VRC.Udon.Common.Interfaces.NetworkEventTarget.All, nameof(SendMediumCrash));
+                    SendCustomNetworkEvent(VRC.Udon.Common.Interfaces.NetworkEventTarget.All, nameof(MediumCrash));
                 }
                 else if (colmag > SmallCrashSpeed)
                 {
-                    SendCustomNetworkEvent(VRC.Udon.Common.Interfaces.NetworkEventTarget.All, nameof(SendSmallCrash));
+                    SendCustomNetworkEvent(VRC.Udon.Common.Interfaces.NetworkEventTarget.All, nameof(SmallCrash));
                 }
             }
+            LastCollisionTime = Time.time;
         }
-        public void SendSmallCrash()
+        public void SmallCrash()
         {
             EntityControl.SendEventToExtensions("SFEXT_G_SmallCrash");
         }
-        public void SendMediumCrash()
+        public void MediumCrash()
         {
             EntityControl.SendEventToExtensions("SFEXT_G_MediumCrash");
         }
-        public void SendBigCrash()
+        public void BigCrash()
         {
             EntityControl.SendEventToExtensions("SFEXT_G_BigCrash");
         }
@@ -2077,7 +2218,6 @@ namespace SaccFlightAndVehicles
         {
             if (IsOwner)
             { TakeMissileDamage(.251f); }
-            LastHitTime = Time.time;
         }
         public void SFEXT_L_MissileHit50()
         {
@@ -2093,7 +2233,6 @@ namespace SaccFlightAndVehicles
         {
             if (IsOwner)
             { TakeMissileDamage(.501f); }
-            LastHitTime = Time.time;
         }
         public void SFEXT_L_MissileHit75()
         {
@@ -2109,7 +2248,6 @@ namespace SaccFlightAndVehicles
         {
             if (IsOwner)
             { TakeMissileDamage(.751f); }
-            LastHitTime = Time.time;
         }
         public void SFEXT_L_MissileHit100()
         {
@@ -2125,13 +2263,11 @@ namespace SaccFlightAndVehicles
         {
             if (IsOwner)
             { TakeMissileDamage(1.001f); }
-            LastHitTime = Time.time;
         }
         public void TakeMissileDamage(float damage)
         {
+            LastHitTime = Time.time;
             Health -= ((FullHealth * damage) * MissileDamageTakenMultiplier);
-            if (PredictDamage && !EntityControl._dead && Health <= 0)
-            { Health = 0.1f; }//the attacker calls the explode function in this case
             Vector3 explosionforce = new Vector3(Random.Range(-MissilePushForce, MissilePushForce), Random.Range(-MissilePushForce, MissilePushForce), Random.Range(-MissilePushForce, MissilePushForce)) * damage;
             VehicleRigidbody.AddTorque(explosionforce, ForceMode.VelocityChange);
         }
@@ -2139,25 +2275,37 @@ namespace SaccFlightAndVehicles
         {
             if (Time.time - LastHitTime > 2)
             {
+                LastHitTime = Time.time;
                 PredictedHealth = Health - ((FullHealth * Damage) * MissileDamageTakenMultiplier);
-                if (PredictedHealth <= 0)
+                if (!wrecked && PredictedHealth <= 0)
                 {
-                    SendCustomNetworkEvent(VRC.Udon.Common.Interfaces.NetworkEventTarget.All, nameof(Explode));
+                    EntityControl.SendEventToExtensions("SFEXT_O_MissileKill");
+                    EntityControl.SendCustomNetworkEvent(VRC.Udon.Common.Interfaces.NetworkEventTarget.All, "SetWrecked");
+                }
+                else if (!EntityControl.dead && PredictedHealth < ExplodeHealth)
+                {
+                    NetworkExplode();
                 }
             }
             else
             {
+                LastHitTime = Time.time;
                 PredictedHealth -= ((FullHealth * Damage) * MissileDamageTakenMultiplier);
-                if (PredictedHealth <= 0)
+                if (!wrecked && PredictedHealth <= 0)
                 {
-                    SendCustomNetworkEvent(VRC.Udon.Common.Interfaces.NetworkEventTarget.All, nameof(Explode));
+                    EntityControl.SendEventToExtensions("SFEXT_O_MissileKill");
+                    EntityControl.SendCustomNetworkEvent(VRC.Udon.Common.Interfaces.NetworkEventTarget.All, "SetWrecked");
+                }
+                else if (!EntityControl.dead && PredictedHealth < ExplodeHealth)
+                {
+                    NetworkExplode();
                 }
             }
         }
         public void SFEXT_P_PassengerEnter()
         {
             Passenger = true;
-            SetCollidersLayer(OnboardVehicleLayer);
+            SetCollidersLayer(EntityControl.OnboardVehicleLayer);
         }
         public void SFEXT_P_PassengerExit()
         {
@@ -2166,7 +2314,7 @@ namespace SaccFlightAndVehicles
             MissilesIncomingHeat = 0;
             MissilesIncomingRadar = 0;
             MissilesIncomingOther = 0;
-            SetCollidersLayer(OutsideVehicleLayer);
+            SetCollidersLayer(EntityControl.OutsideVehicleLayer);
         }
         public void SFEXT_G_PassengerEnter()
         {
@@ -2183,17 +2331,22 @@ namespace SaccFlightAndVehicles
             GDamageToTake = 0f;
             VertGs = 0f;
             AllGs = 0f;
-            VehicleRigidbody.velocity = CurrentVel;
-            LastFrameVel = CurrentVel;
+            for (int i = 0; i < NumFUinAvgTime; i++) { FrameGs[i] = Vector3.zero; }
             if (_EngineOn)
             {
-                //the Occupied check is to check if the player just left the instance while in a vehicle
-                //OnPlayerLeft() runs after OnOwnershipTransferred()
-                if ((EntityControl.Piloting || !Occupied))
+                //The !Occupied check is to check if the player just left the instance while not in the vehicle
+                //We want the vehicle to keep flying itself if it was left in auto-hover/fly straight mode with no pilot and its owner leaves
+
+                //OnPlayerLeft() runs after OnOwnershipTransferred() // <--- no longer true
+                //!EntityControl.pilotLeftFlag is now needed because the order is random
+                //if OnPlayerLeft() runs first, '&& !EntityControl.pilotLeftFlag' ensures this still works
+
+                if ((EntityControl.Piloting || !Occupied) && !EntityControl.pilotLeftFlag)
+                // pilot wasn't in the vehicle when you took ownership, or you just took ownership by getting in
                 {
                     PlayerThrottle = ThrottleInput = EngineOutputLastFrame = EngineOutput;
                 }
-                else
+                else// user was in the vehicle when they left or you took ownership with a grapple
                 {
                     SendCustomNetworkEvent(VRC.Udon.Common.Interfaces.NetworkEventTarget.All, nameof(SetEngineOff));
                     PlayerThrottle = ThrottleInput = EngineOutputLastFrame = EngineOutput = 0;
@@ -2204,10 +2357,12 @@ namespace SaccFlightAndVehicles
                 VehicleRigidbody.drag = 0;
                 VehicleRigidbody.angularDrag = 0;
             }
+            SetupGCalcValues();
         }
         public void SFEXT_O_LoseOwnership()
         {
             IsOwner = false;
+            EnableLiftSurfaces(false);
             if (!UsingManualSync)
             {
                 VehicleRigidbody.drag = 9999;
@@ -2217,10 +2372,7 @@ namespace SaccFlightAndVehicles
         public void SFEXT_O_PilotEnter()
         {
             if (Asleep) { WakeUp(); }
-            if (!InEditor)
-            {
-                InVR = localPlayer.IsUserInVR();
-            }
+            InVR = EntityControl.InVR;
             VTOLAngleInput = VTOLAngle;
             VTOLAngleDegrees = VTOLMinAngle + (vtolangledif * VTOLAngle);
             GDHitRigidbody = null;
@@ -2238,12 +2390,13 @@ namespace SaccFlightAndVehicles
             AllGs = 0;
             VehicleRigidbody.velocity = CurrentVel;
             LastFrameVel = CurrentVel;
-            if (EngineOnOnEnter && Fuel > 0 && !_PreventEngineToggle)
+            if (EngineOnOnEnter && Fuel > 0 && !_PreventEngineToggle && !wrecked)
             {
                 SendCustomNetworkEvent(VRC.Udon.Common.Interfaces.NetworkEventTarget.All, nameof(SetEngineOn));
             }
+            SetupGCalcValues();
 
-            SetCollidersLayer(OnboardVehicleLayer);
+            SetCollidersLayer(EntityControl.OnboardVehicleLayer);
         }
         public void SFEXT_G_PilotEnter()
         {
@@ -2285,7 +2438,36 @@ namespace SaccFlightAndVehicles
                 ThrottleInput = 0; ;
             }
             //set vehicle's collider's layers back
-            SetCollidersLayer(OutsideVehicleLayer);
+            SetCollidersLayer(EntityControl.OutsideVehicleLayer);
+        }
+        int numGrapplesAttached;
+        public void SFEXT_L_GrappleAttach()
+        {
+            if (numGrapplesAttached == 0)
+            {
+                foreach (WheelCollider wheel in VehicleWheelColliders)
+                {
+                    wheel.motorTorque = 0.00000000000000000000000000000000001f;
+                    wheel.brakeTorque = 0;
+                }
+            }
+            numGrapplesAttached++;
+        }
+        public void SFEXT_L_GrappleDetach()
+        {
+            numGrapplesAttached--;
+            if (numGrapplesAttached < 0) { numGrapplesAttached = 0; }
+            if (EngineOn) return;
+            if (numGrapplesAttached != 0) return;
+            foreach (WheelCollider wheel in VehicleWheelColliders)
+            {
+                wheel.motorTorque = 0f;
+            }
+            if (Piloting)
+            {
+                if (EngineOnOnEnter)
+                    SendCustomNetworkEvent(VRC.Udon.Common.Interfaces.NetworkEventTarget.All, nameof(SetEngineOn));
+            }
         }
         public void SetCollidersLayer(int NewLayer)
         {
@@ -2323,29 +2505,36 @@ namespace SaccFlightAndVehicles
             AirVel = VehicleRigidbody.velocity - (FinalWind * StillWindMulti);
             AirSpeed = AirVel.magnitude;
             Vector3 VecForward = VehicleTransform.forward;
-            AngleOfAttackPitch = Vector3.SignedAngle(VecForward, Vector3.ProjectOnPlane(AirVel, VehicleTransform.right), VehicleTransform.right);
+            AngleOfAttackPitch = Vector3.SignedAngle(VecForward, Vector3.ProjectOnPlane(AirVel, VehicleTransform.right), VehicleTransform.right) - ZeroLiftAoA;
             AngleOfAttackYaw = Vector3.SignedAngle(VecForward, Vector3.ProjectOnPlane(AirVel, VehicleTransform.up), VehicleTransform.up);
             //angle of attack stuff, pitch and yaw are calculated seperately
             //pitch and yaw each have a curve for when they are within the 'MaxAngleOfAttack' and a linear version up to 90 degrees, which are Max'd (using Mathf.Clamp) for the final result.
             //the linear version is used for high aoa, and is 0 when at 90 degrees, and 1(multiplied by HighAoaMinControl) at 0. When at more than 90 degrees, the control comes back with the same curve but the inputs are inverted. (unless thrust vectoring is enabled) The invert code is elsewhere.
-            AoALiftPitch = Mathf.Min(Mathf.Abs(AngleOfAttackPitch) / MaxAngleOfAttackPitch, Mathf.Abs(Mathf.Abs(AngleOfAttackPitch) - 180) / MaxAngleOfAttackPitch);//angle of attack as 0-1 float, for backwards and forwards
-            AoALiftPitch = -AoALiftPitch + 1;
-            AoALiftPitch = -Mathf.Pow((1 - AoALiftPitch), AoaCurveStrength) + 1;//give it a curve
 
-            float AoALiftPitchMin = Mathf.Min(Mathf.Abs(AngleOfAttackPitch) * 0.0111111111f/* same as divide by 90 */, Mathf.Abs(Mathf.Abs(AngleOfAttackPitch) - 180) * 0.0111111111f/* same as divide by 90 */);//linear version to 90 for high aoa
-            AoALiftPitchMin = Mathf.Clamp((-AoALiftPitchMin + 1) * HighPitchAoaMinControl, 0, 1);
+            float absPitch = Mathf.Abs(AngleOfAttackPitch);
+            float absYaw = Mathf.Abs(AngleOfAttackYaw);
+            //AngleOfAttack = Vector3.Angle(VecForward, AirVel);
+            //^ the reason I'm not doing this is because it would give a circular result instead of square, when the physics is square
+            // which would change a bunch of stuff that uses the value, (Limits, Effects/Sounds)
+            // Limits in particular is important because it effects the controls, based on the physics.
+            AngleOfAttack = Mathf.Max(absPitch, absYaw);
+
+            //for this part AoA maxes out at 90 and reduces again as move towards facing backwards
+            if (absPitch > 90) absPitch = 180 - absPitch;//flying backwards
+            AoALiftPitch = absPitch / MaxAngleOfAttackPitch;//angle of attack as 0-1 float, for backwards and forwards
+            AoALiftPitch = 1 - Mathf.Pow(AoALiftPitch, AoaCurveStrength);//give it a curve
+
+            float AoALiftPitchMin = absPitch * 0.0111111111f/* same as divide by 90 */;//linear version to 90 for high aoa
+            AoALiftPitchMin = Mathf.Clamp01((1 - AoALiftPitchMin) * HighPitchAoaMinControl);
             AoALiftPitch = Mathf.Clamp(AoALiftPitch, AoALiftPitchMin, 1);
 
-            AoALiftYaw = Mathf.Min(Mathf.Abs(AngleOfAttackYaw) / MaxAngleOfAttackYaw, Mathf.Abs((Mathf.Abs(AngleOfAttackYaw) - 180)) / MaxAngleOfAttackYaw);
+            if (absYaw > 90) absYaw = 180 - absYaw;//flying backwards
+            AoALiftYaw = absYaw / MaxAngleOfAttackYaw;
+            AoALiftYaw = 1 - Mathf.Pow(AoALiftYaw, AoaCurveStrength);//give it a curve
 
-            AoALiftYaw = -AoALiftYaw + 1;
-            AoALiftYaw = -Mathf.Pow((1 - AoALiftYaw), AoaCurveStrength) + 1;//give it a curve
-
-            float AoALiftYawMin = Mathf.Min(Mathf.Abs(AngleOfAttackYaw) * 0.0111111111f/* same as divide by 90 */, Mathf.Abs(Mathf.Abs(AngleOfAttackYaw) - 180) * 0.0111111111f/* same as divide by 90 */);//linear version to 90 for high aoa
-            AoALiftYawMin = Mathf.Clamp((-AoALiftPitchMin + 1) * HighYawAoaMinControl, 0, 1);
+            float AoALiftYawMin = absYaw * 0.0111111111f/* same as divide by 90 */;//linear version to 90 for high aoa
+            AoALiftYawMin = Mathf.Clamp01((1 - AoALiftYawMin) * HighYawAoaMinControl);
             AoALiftYaw = Mathf.Clamp(AoALiftYaw, AoALiftYawMin, 1);
-
-            AngleOfAttack = Mathf.Max(Mathf.Abs(AngleOfAttackPitch), Mathf.Abs(AngleOfAttackYaw));
         }
         private float GroundEffect(bool VTOL, Vector3 Position, Vector3 Direction, float GEStrength, float speedliftfac)
         {
@@ -2355,14 +2544,14 @@ namespace SaccFlightAndVehicles
             {
                 float GroundEffect = ((-GE.distance + GroundEffectMaxDistance) / GroundEffectMaxDistance) * GEStrength;
                 if (VTOL) { return 1 + GroundEffect; }
-                GroundEffect *= ExtraLift;
+                GroundEffect *= ExtraVelLift;
                 VelLift = VelLiftStart + GroundEffect;
                 VelLiftMax = Mathf.Max(VelLiftMaxStart, VTOL ? 999999999f : GroundEffectLiftMax);
             }
             else//set non-groundeffect'd vel lift values
             {
                 if (VTOL) { return 1; }
-                VelLift = VelLiftStart;
+                VelLift = VelLiftStart * ExtraVelLift;
                 VelLiftMax = VelLiftMaxStart;
             }
             return Mathf.Min(speedliftfac * AoALiftPitch * VelLift, VelLiftMax);
@@ -2396,7 +2585,7 @@ namespace SaccFlightAndVehicles
             {
                 VTOLAngleInput = Mathf.Clamp(VTOLAngleInput, 0, 1);
             }
-            VTOLAngle = Mathf.MoveTowards(VTOLAngle, VTOLAngleInput, VTOLAngleDivider * Time.smoothDeltaTime);
+            VTOLAngle = Mathf.MoveTowards(VTOLAngle, VTOLAngleInput, VTOLAngleDivider * Time.deltaTime);
             if (VTOLAngle < 0) { VTOLAngle++; }
             else if (VTOLAngle > 1) { VTOLAngle--; }
             VTOLAngleDegrees = VTOLMinAngle + (vtolangledif * VTOLAngle);
@@ -2422,7 +2611,7 @@ namespace SaccFlightAndVehicles
                 {
                     if (_EngineOn)
                     {
-                        float SpeedForVTOL_Inverse_xVTOL = ((SpeedForVTOL * -1) + 1) * VTOLAngleForward90;
+                        float SpeedForVTOL_Inverse_xVTOL = (1 - SpeedForVTOL) * VTOLAngleForward90;
                         //the thrust vec values are linearly scaled up the slower you go while in VTOL, from 0 at VTOLLoseControlSpeed
                         PitchThrustVecMulti = Mathf.Lerp(PitchThrustVecMultiStart, VTOLPitchThrustVecMulti, SpeedForVTOL_Inverse_xVTOL);
                         YawThrustVecMulti = Mathf.Lerp(YawThrustVecMultiStart, VTOLYawThrustVecMulti, SpeedForVTOL_Inverse_xVTOL);
@@ -2470,9 +2659,19 @@ namespace SaccFlightAndVehicles
         }
         public Vector2 UnpackThrottles(float Throttle)
         {
+            Throttle = Mathf.Abs(Throttle);
             //x = throttle amount (0-1), y = afterburner amount (0-1)
             return new Vector2(Mathf.Min(Throttle, ThrottleAfterburnerPoint) * ThrottleNormalizer,
             Mathf.Max((Mathf.Max(Throttle, ThrottleAfterburnerPoint) - ThrottleAfterburnerPoint) * ABNormalizer, 0));
+        }
+        public void EnableLiftSurfaces(bool enable)
+        {
+            if (enable == LiftSurfacesEnabled) { return; }
+            LiftSurfacesEnabled = enable;
+            for (int i = 0; i < LiftSurfaces.Length; i++)
+            {
+                LiftSurfaces[i].gameObject.SetActive(enable);
+            }
         }
     }
 }

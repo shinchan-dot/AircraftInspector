@@ -22,8 +22,10 @@ namespace SaccFlightAndVehicles
         public bool AllowToggleDuringTransition = true;
         public float TransitionLength = 5f;
         private float TransitionTime;
-        private SaccEntity EntityControl;
-        private bool UseLeftTrigger = false;
+        [System.NonSerializedAttribute] public bool LeftDial = false;
+        [System.NonSerializedAttribute] public int DialPosition = -999;
+        [System.NonSerializedAttribute] public SaccEntity EntityControl;
+        [System.NonSerializedAttribute] public SAV_PassengerFunctionsController PassengerFunctionsControl;
         private bool TriggerLastFrame;
         [System.NonSerializedAttribute] public bool GearUp = false;
         private bool DragApplied = false;
@@ -41,17 +43,14 @@ namespace SaccFlightAndVehicles
             }
             get => DisableGearToggle;
         }
-        public void DFUNC_LeftDial() { UseLeftTrigger = true; }
-        public void DFUNC_RightDial() { UseLeftTrigger = false; }
         public void SFEXT_L_EntityStart()
         {
-            EntityControl = (SaccEntity)SAVControl.GetProgramVariable("EntityControl");
             CenterOfMass = EntityControl.CenterOfMass;
             LandingGearDragMulti -= 1;//to match how the old values worked
             SetGearDown();
             if (Dial_Funcon) { Dial_Funcon.SetActive(!GearUp); }
             VRCPlayerApi localPlayer = Networking.LocalPlayer;
-            IsOwner = (bool)SAVControl.GetProgramVariable("IsOwner");
+            IsOwner = EntityControl.IsOwner;
 
         }
         public void DFUNC_Selected()
@@ -105,7 +104,7 @@ namespace SaccFlightAndVehicles
         private void Update()
         {
             float Trigger;
-            if (UseLeftTrigger)
+            if (LeftDial)
             { Trigger = Input.GetAxisRaw("Oculus_CrossPlatform_PrimaryIndexTrigger"); }
             else
             { Trigger = Input.GetAxisRaw("Oculus_CrossPlatform_SecondaryIndexTrigger"); }
@@ -124,6 +123,7 @@ namespace SaccFlightAndVehicles
         }
         public void SetGearUp()
         {
+            if (GearUp) { return; }
             //Debug.Log("SetGearUp");
             if (!DisableGroundDetector)
             {
@@ -146,6 +146,7 @@ namespace SaccFlightAndVehicles
         }
         public void SetGearDown()
         {
+            if (!GearUp) { return; }
             //Debug.Log("SetGearDown");
             if (DisableGroundDetector)
             {

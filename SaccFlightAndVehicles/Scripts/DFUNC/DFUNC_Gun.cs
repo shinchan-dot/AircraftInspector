@@ -13,8 +13,12 @@ namespace SaccFlightAndVehicles
         public Animator GunAnimator;
         [Tooltip("Animator bool that is true when the gun is firing")]
         public string GunFiringBoolName = "gunfiring";
+        [Tooltip("Desktop key for firing when selected")]
+        public KeyCode FireKey = KeyCode.Space;
+        [Tooltip("Desktop key for firing when not selected")]
+        public KeyCode FireNowKey = KeyCode.None;
         [Tooltip("Transform of which its X scale scales with ammo")]
-        public Transform AmmoBar;
+        public Transform[] AmmoBars;
         [Tooltip("Position at which recoil forces are added, not required for recoil to work. Only use this if you want the vehicle to rotate when shooting")]
         public Transform GunRecoilEmpty;
         [Tooltip("There is a separate particle system for doing damage that is only enabled for the user of the gun. This object is the parent of that particle system, is enabled when entering the seat, and disabled when exiting")]
@@ -26,7 +30,7 @@ namespace SaccFlightAndVehicles
         [Tooltip("How long it takes to fully reload from empty in seconds")]
         public float FullReloadTimeSec = 20;
         [UdonSynced(UdonSyncMode.None)] public float GunAmmoInSeconds = 12;
-        public float GunRecoil = 150;
+        public float RecoilForce = 1;
         [Tooltip("Set a boolean value in the animator when switching to this weapon?")]
         public bool DoAnimBool = false;
         [Tooltip("Animator bool that is true when this function is selected")]
@@ -39,11 +43,16 @@ namespace SaccFlightAndVehicles
         public bool DisallowFireIfWind = false;
         [Tooltip("Enable these objects when GUN selected")]
         public GameObject[] EnableOnSelected;
+        [Tooltip("On desktop mode, fire even when not selected if OnPickupUseDown is pressed")]
+        [SerializeField] bool DT_UseToFire;
         private bool Grounded;
-        private SaccEntity EntityControl;
+        bool KeepingAwake;
+        [System.NonSerializedAttribute] public bool LeftDial = false;
+        [System.NonSerializedAttribute] public int DialPosition = -999;
+        [System.NonSerializedAttribute] public SaccEntity EntityControl;
+        [System.NonSerializedAttribute] public SAV_PassengerFunctionsController PassengerFunctionsControl;
         private bool AnimOn;
         private int AnimBool_STRING;
-        private bool UseLeftTrigger = false;
         [System.NonSerializedAttribute] public float FullGunAmmoInSeconds;
         private Rigidbody VehicleRigidbody;
         [System.NonSerializedAttribute, UdonSynced, FieldChangeCallback(nameof(Firing))] public bool _firing;
@@ -51,6 +60,25 @@ namespace SaccFlightAndVehicles
         {
             set
             {
+                if (EntityControl.IsOwner && RecoilForce > 0)
+                {
+                    if (value)
+                    {
+                        if (!KeepingAwake)
+                        {
+                            KeepingAwake = true;
+                            EntityControl.KeepAwake_++;
+                        }
+                    }
+                    else
+                    {
+                        if (KeepingAwake)
+                        {
+                            KeepingAwake = false;
+                            EntityControl.KeepAwake_--;
+                        }
+                    }
+                }
                 GunAnimator.SetBool(GunFiringBoolName, value);
                 _firing = value;
             }
@@ -58,31 +86,32 @@ namespace SaccFlightAndVehicles
         }
         private float FullGunAmmoDivider;
         private bool Selected = false;
+        bool inVR;
+        private bool Selected_HUD = false;
         private float reloadspeed;
-        private bool LeftDial = false;
-        private bool InVehicle = false;
-        private int DialPosition = -999;
+        private bool Piloting = false;
         private Vector3 AmmoBarScaleStart;
-        public void DFUNC_LeftDial() { UseLeftTrigger = true; }
-        public void DFUNC_RightDial() { UseLeftTrigger = false; }
+        private Vector3[] AmmoBarScaleStarts;
         public void SFEXT_L_EntityStart()
         {
             FullGunAmmoInSeconds = GunAmmoInSeconds;
             reloadspeed = FullGunAmmoInSeconds / FullReloadTimeSec;
-            if (AmmoBar) { AmmoBarScaleStart = AmmoBar.localScale; }
 
-            EntityControl = (SaccEntity)SAVControl.GetProgramVariable("EntityControl");
+            AmmoBarScaleStarts = new Vector3[AmmoBars.Length];
+            for (int i = 0; i < AmmoBars.Length; i++)
+            {
+                AmmoBarScaleStarts[i] = AmmoBars[i].localScale;
+            }
+
             VehicleRigidbody = EntityControl.GetComponent<Rigidbody>();
+            IsOwner = EntityControl.IsOwner;
             FullGunAmmoDivider = 1f / (FullGunAmmoInSeconds > 0 ? FullGunAmmoInSeconds : 10000000);
             AAMTargets = EntityControl.AAMTargets;
             NumAAMTargets = AAMTargets.Length;
             VehicleTransform = EntityControl.transform;
             CenterOfMass = EntityControl.CenterOfMass;
-            OutsideVehicleLayer = (int)SAVControl.GetProgramVariable("OutsideVehicleLayer");
-            GunRecoil *= VehicleRigidbody.mass;
+            OutsideVehicleLayer = EntityControl.OutsideVehicleLayer;
             if (GunDamageParticle) GunDamageParticle.gameObject.SetActive(false);
-
-            FindSelf();
 
             //HUD
             if (HUDControl)
@@ -109,6 +138,7 @@ namespace SaccFlightAndVehicles
         {
             SendCustomNetworkEvent(VRC.Udon.Common.Interfaces.NetworkEventTarget.All, nameof(Set_Unselected));
             Selected = false;
+            PickupTrigger = 0;
             if (_firing)
             {
                 Firing = false;
@@ -119,10 +149,13 @@ namespace SaccFlightAndVehicles
         }
         public void SFEXT_O_PilotEnter()
         {
-            InVehicle = true;
+            Piloting = true;
+            inVR = EntityControl.InVR;
             if (GunDamageParticle) { GunDamageParticle.gameObject.SetActive(true); }
+            if (_firing) { Firing = false; }
             gameObject.SetActive(true);
             RequestSerialization();
+            OnDeserialization();
         }
         public void SFEXT_G_PilotEnter()
         {
@@ -137,27 +170,42 @@ namespace SaccFlightAndVehicles
         }
         public void SFEXT_O_PilotExit()
         {
-            InVehicle = false;
-            if (Selected) { SendCustomNetworkEvent(VRC.Udon.Common.Interfaces.NetworkEventTarget.All, nameof(Set_Inactive)); }
+            Piloting = false;
+            if (Selected) { SendCustomNetworkEvent(VRC.Udon.Common.Interfaces.NetworkEventTarget.All, nameof(Set_Unselected)); }//unselect 
             Selected = false;
             if (GunDamageParticle) { GunDamageParticle.gameObject.SetActive(false); }
         }
-        public void SFEXT_P_PassengerEnter()
-        { InVehicle = true; }
-        public void SFEXT_P_PassengerExit()
-        { InVehicle = false; }
         public void SFEXT_G_ReSupply()
         {
-            if (GunAmmoInSeconds != FullGunAmmoInSeconds)
-            { SAVControl.SetProgramVariable("ReSupplied", (int)SAVControl.GetProgramVariable("ReSupplied") + 1); }
-            GunAmmoInSeconds = Mathf.Min(GunAmmoInSeconds + reloadspeed, FullGunAmmoInSeconds);
+            if (IsOwner)
+            {
+                GunAmmoInSeconds = Mathf.Min(GunAmmoInSeconds + reloadspeed, FullGunAmmoInSeconds);
+                RequestSerialization();
+                OnDeserialization();
+            }
+            if (SAVControl && GunAmmoInSeconds != FullGunAmmoInSeconds)
+            { EntityControl.SetProgramVariable("ReSupplied", (int)EntityControl.GetProgramVariable("ReSupplied") + 1); }
+        }
+        public void SFEXT_G_ReArm() { SFEXT_G_ReSupply(); }
+        public override void OnDeserialization()
+        {
             UpdateAmmoVisuals();
         }
-        public void UpdateAmmoVisuals() { if (AmmoBar) { AmmoBar.localScale = new Vector3((GunAmmoInSeconds * FullGunAmmoDivider) * AmmoBarScaleStart.x, AmmoBarScaleStart.y, AmmoBarScaleStart.z); } }
+        public void UpdateAmmoVisuals()
+        {
+            for (int i = 0; i < AmmoBars.Length; i++)
+            {
+                AmmoBars[i].localScale = new Vector3((GunAmmoInSeconds * FullGunAmmoDivider) * AmmoBarScaleStarts[i].x, AmmoBarScaleStarts[i].y, AmmoBarScaleStarts[i].z);
+            }
+        }
         public void SFEXT_G_RespawnButton()
         {
-            GunAmmoInSeconds = FullGunAmmoInSeconds;
-            UpdateAmmoVisuals();
+            if (IsOwner)
+            {
+                GunAmmoInSeconds = FullGunAmmoInSeconds;
+                RequestSerialization();
+                UpdateAmmoVisuals();
+            }
             if (DoAnimBool && AnimOn)
             { SetBoolOff(); }
         }
@@ -167,6 +215,7 @@ namespace SaccFlightAndVehicles
             if (HudCrosshair) { HudCrosshair.SetActive(false); }
             for (int i = 0; i < EnableOnSelected.Length; i++)
             { EnableOnSelected[i].SetActive(true); }
+            Selected_HUD = true;
         }
         public void Set_Unselected()
         {
@@ -176,6 +225,7 @@ namespace SaccFlightAndVehicles
             if (GUNLeadIndicator) { GUNLeadIndicator.gameObject.SetActive(false); }
             for (int i = 0; i < EnableOnSelected.Length; i++)
             { EnableOnSelected[i].SetActive(false); }
+            Selected_HUD = false;
         }
         public void Set_Active()
         {
@@ -187,10 +237,18 @@ namespace SaccFlightAndVehicles
             Firing = false;
             gameObject.SetActive(false);
         }
+        bool IsOwner;
         public void SFEXT_O_TakeOwnership()
         {
-            if (_firing)//if someone times out, tell weapon to stop firing if you take ownership.
+            IsOwner = true;
+            if (gameObject.activeSelf)//if someone times out, tell weapon to stop firing if you take ownership.
             { SendCustomNetworkEvent(VRC.Udon.Common.Interfaces.NetworkEventTarget.All, nameof(Set_Inactive)); }
+            if (Selected_HUD)
+            { SendCustomNetworkEvent(VRC.Udon.Common.Interfaces.NetworkEventTarget.All, nameof(Set_Unselected)); }
+        }
+        public void SFEXT_O_LoseOwnership()
+        {
+            IsOwner = false;
         }
         public void SFEXT_G_Explode()
         {
@@ -200,39 +258,35 @@ namespace SaccFlightAndVehicles
         }
         public void LateUpdate()
         {
-            if (InVehicle)
+            if (Piloting)
             {
-                if (Selected)
+                if (Selected || Input.GetKey(FireNowKey) || (!inVR && DT_UseToFire))
                 {
                     float DeltaTime = Time.deltaTime;
-                    float Trigger;
-                    if (UseLeftTrigger)
-                    { Trigger = Input.GetAxisRaw("Oculus_CrossPlatform_PrimaryIndexTrigger"); }
-                    else
-                    { Trigger = Input.GetAxisRaw("Oculus_CrossPlatform_SecondaryIndexTrigger"); }
-                    if ((!Grounded || AllowFiringGrounded) && ((Trigger > 0.75 || (Input.GetKey(KeyCode.Space))) && GunAmmoInSeconds > 0))
+                    float Trigger = 0;
+                    if (EntityControl.Holding || !inVR && DT_UseToFire)
+                        Trigger = PickupTrigger;
+                    else if (Selected)
+                    {
+                        if (LeftDial)
+                        { Trigger = Input.GetAxisRaw("Oculus_CrossPlatform_PrimaryIndexTrigger"); }
+                        else
+                        { Trigger = Input.GetAxisRaw("Oculus_CrossPlatform_SecondaryIndexTrigger"); }
+                    }
+                    if ((!Grounded || AllowFiringGrounded) && ((Trigger > 0.75 || (Input.GetKey(FireKey) || Input.GetKey(FireNowKey))) && GunAmmoInSeconds > 0))
                     {
                         if (DisallowFireIfWind)
                         {
-                            if (((Vector3)SAVControl.GetProgramVariable("FinalWind")).magnitude > 0f)
+                            if (((Vector3)SAVControl.GetProgramVariable("FinalWind")).sqrMagnitude > 0f)
                             { return; }
                         }
                         if (!_firing)
                         {
                             Firing = true;
                             RequestSerialization();
-                            if ((bool)SAVControl.GetProgramVariable("IsOwner"))
-                            { EntityControl.SendEventToExtensions("SFEXT_O_GunStartFiring"); }
+                            // EntityControl.SendEventToExtensions("SFEXT_O_GunStartFiring");
                         }
                         GunAmmoInSeconds = Mathf.Max(GunAmmoInSeconds - DeltaTime, 0);
-                        if (!GunRecoilEmpty)
-                        {
-                            VehicleRigidbody.AddRelativeForce(-Vector3.forward * GunRecoil * .01f * Time.deltaTime, ForceMode.Impulse);
-                        }
-                        else
-                        {
-                            VehicleRigidbody.AddForceAtPosition(-GunRecoilEmpty.forward * GunRecoil * .01f * Time.deltaTime, GunRecoilEmpty.position, ForceMode.Impulse);
-                        }
                     }
                     else
                     {
@@ -240,14 +294,20 @@ namespace SaccFlightAndVehicles
                         {
                             Firing = false;
                             RequestSerialization();
-                            if ((bool)SAVControl.GetProgramVariable("IsOwner"))
-                            { EntityControl.SendEventToExtensions("SFEXT_O_GunStopFiring"); }
+                            // EntityControl.SendEventToExtensions("SFEXT_O_GunStopFiring");
                         }
                     }
                     if (HUDControl)
                     { Hud(); }
+                    UpdateAmmoVisuals();
                 }
-                UpdateAmmoVisuals();
+                else if (_firing)
+                {
+                    Firing = false;
+                    RequestSerialization();
+                    OnDeserialization();
+                    // EntityControl.SendEventToExtensions("SFEXT_O_GunStopFiring");
+                }
             }
         }
         private GameObject[] AAMTargets;
@@ -267,6 +327,18 @@ namespace SaccFlightAndVehicles
         private void FixedUpdate()//this is just the old  AAMTargeting adjusted slightly
                                   //there may unnecessary stuff in here because it doesn't need to do missile related stuff any more 
         {
+            if (_firing && EntityControl.IsOwner)
+            {
+                if (!GunRecoilEmpty)
+                {
+                    VehicleRigidbody.AddRelativeForce(-Vector3.forward * RecoilForce, ForceMode.Acceleration);
+                }
+                else
+                {
+                    VehicleRigidbody.AddForceAtPosition(-GunRecoilEmpty.forward * RecoilForce, GunRecoilEmpty.position, ForceMode.Acceleration);
+                }
+            }
+            if (!IsOwner) return;
             if (Selected && HUDControl)
             {
                 float DeltaTime = Time.fixedDeltaTime;
@@ -297,7 +369,12 @@ namespace SaccFlightAndVehicles
                         RaycastHit hitnext;
                         //raycast to check if it's behind something
                         bool LineOfSightNext = Physics.Raycast(HudControlPosition, AAMNextTargetDirection, out hitnext, 99999999, 133137 /* Default, Water, Environment, and Walkthrough */, QueryTriggerInteraction.Collide);
-
+#if UNITY_EDITOR
+                        if (hitnext.collider)
+                            Debug.DrawLine(HudControlPosition, hitnext.point, Color.red);
+                        else
+                            Debug.DrawRay(HudControlPosition, AAMNextTargetDirection, Color.yellow);
+#endif
                         /*                 Debug.Log(string.Concat("LoS_next ", LineOfSightNext));
                                         if (hitnext.collider != null) Debug.Log(string.Concat("RayCastCorrectLayer_next ", (hitnext.collider.gameObject.layer == OutsidePlaneLayer)));
                                         if (hitnext.collider != null) Debug.Log(string.Concat("RayCastLayer_next ", hitnext.collider.gameObject.layer));
@@ -348,6 +425,12 @@ namespace SaccFlightAndVehicles
                 //raycast to check if it's behind something
                 RaycastHit hitcurrent;
                 bool LineOfSightCur = Physics.Raycast(HudControlPosition, AAMCurrentTargetDirection, out hitcurrent, 99999999, 133137 /* Default, Water, Environment, and Walkthrough */, QueryTriggerInteraction.Collide);
+#if UNITY_EDITOR
+                if (hitcurrent.collider)
+                    Debug.DrawLine(HudControlPosition, hitcurrent.point, Color.green);
+                else
+                    Debug.DrawRay(HudControlPosition, AAMNextTargetDirection, Color.blue);
+#endif
                 //used to make lock remain for .25 seconds after target is obscured
                 if (!LineOfSightCur || (hitcurrent.collider && hitcurrent.collider.gameObject.layer != OutsideVehicleLayer))
                 { AAMTargetObscuredDelay += DeltaTime; }
@@ -392,9 +475,32 @@ namespace SaccFlightAndVehicles
         public void SFEXT_G_TouchDown() { Grounded = true; }
         public void SFEXT_G_TouchDownWater() { Grounded = true; }
         public void SFEXT_G_TakeOff() { Grounded = false; }
+        private int PickupTrigger = 0;
+        public void SFEXT_O_OnPickupUseDown()
+        {
+            PickupTrigger = 1;
+        }
+        public void SFEXT_O_OnPickupUseUp()
+        {
+            PickupTrigger = 0;
+        }
+        public void SFEXT_O_OnPickup()
+        {
+            SFEXT_O_PilotEnter();
+        }
+        public void SFEXT_O_OnDrop()
+        {
+            SFEXT_O_PilotExit();
+            PickupTrigger = 0;
+        }
+        public void SFEXT_G_OnPickup() { SFEXT_G_PilotEnter(); }
+        public void SFEXT_G_OnDrop() { SFEXT_G_PilotExit(); }
         //hud stuff
         public Transform TargetIndicator;
         public Transform GUNLeadIndicator;
+        [Range(0.01f, 1)]
+        [Tooltip("1 = max accuracy, 0.01 = smooth but innacurate")]
+        [SerializeField] private float GunLeadResponsiveness = 1f;
         private float GUN_TargetSpeedLerper;
         private Vector3 RelativeTargetVelLastFrame;
         private Vector3 RelativeTargetVel;
@@ -404,7 +510,6 @@ namespace SaccFlightAndVehicles
         public float BulletSpeed;
         private void Hud()
         {
-            float SmoothDeltaTime = Time.smoothDeltaTime;
             if (GUNHasTarget)
             {
                 if (TargetIndicator)
@@ -419,47 +524,31 @@ namespace SaccFlightAndVehicles
                 if (GUNLeadIndicator)
                 {
                     //GUN Lead Indicator
+                    float deltaTime = Time.deltaTime;
                     Vector3 HudControlPosition = HUDControl.transform.position;
                     GUNLeadIndicator.gameObject.SetActive(true);
-                    Vector3 TargetDir;
+                    Vector3 TargetPos;
                     if (!AAMCurrentTargetSAVControl)//target is a dummy target
-                    { TargetDir = AAMTargets[AAMTarget].transform.position - HudControlPosition; }
+                    { TargetPos = AAMTargets[AAMTarget].transform.position; }
                     else
-                    { TargetDir = AAMCurrentTargetSAVControl.CenterOfMass.position - HudControlPosition; }
-                    GUN_TargetDirOld = Vector3.Lerp(GUN_TargetDirOld, TargetDir, .2f);
+                    { TargetPos = AAMCurrentTargetSAVControl.CenterOfMass.position; }
+                    Vector3 TargetDir = TargetPos - HudControlPosition;
 
                     Vector3 RelativeTargetVel = TargetDir - GUN_TargetDirOld;
-                    float BulletPlusPlaneSpeed = ((Vector3)SAVControl.GetProgramVariable("CurrentVel") + (VehicleTransform.forward * BulletSpeed) - (RelativeTargetVel * .25f)).magnitude;
-                    Vector3 TargetAccel = RelativeTargetVel - RelativeTargetVelLastFrame;
-                    //GUN_TargetDirOld is around 4 frames worth of distance behind a moving target (lerped by .2) in order to smooth out the calculation for unsmooth netcode
-                    //multiplying the result by .25(to get back to 1 frames worth) seems to actually give an accurate enough result to use in prediction
-                    GUN_TargetSpeedLerper = Mathf.Lerp(GUN_TargetSpeedLerper, (RelativeTargetVel.magnitude * .25f) / SmoothDeltaTime, 15 * SmoothDeltaTime);
-                    float BulletHitTime = TargetDir.magnitude / BulletPlusPlaneSpeed;
-                    //normalize lerped relative target velocity vector and multiply by lerped speed
-                    Vector3 RelTargVelNormalized = RelativeTargetVel.normalized;
-                    Vector3 PredictedPos = TargetDir
-                        + (((RelTargVelNormalized * GUN_TargetSpeedLerper)/* Linear */
-                            //the .125 in the next line is combined .25 for undoing the lerp, and .5 for the acceleration formula
-                            + (TargetAccel * .125f * BulletHitTime))//Acceleration
-                                    * BulletHitTime);
 
-                    //refine the position of the prediction to account for if it's closer or further away from you than the target, (because bullet travel time will change)
-                    Vector3 PredictionPosGlobal = transform.position + PredictedPos;
-                    Vector3 TargetPos = AAMTargets[AAMTarget].transform.position;
-                    float DistFromPrediction = Vector3.Distance(PredictionPosGlobal, transform.position);
-                    float DistFromTarg = Vector3.Distance(TargetPos, transform.position);
-                    float DistDiv = DistFromPrediction / DistFromTarg;
-                    //convert the vector used to be the vector between the prediction and the target vehicle
-                    PredictedPos = PredictionPosGlobal - TargetPos;
-                    //multiply it by the ratio of the distance to the predicition and the distance to the target
-                    PredictedPos *= DistDiv;
+                    GUN_TargetDirOld = Vector3.Lerp(GUN_TargetDirOld, TargetDir, GunLeadResponsiveness);
+                    GUN_TargetSpeedLerper = RelativeTargetVel.magnitude * GunLeadResponsiveness / deltaTime;
 
-                    //use the distance to the new predicted position to add the bullet drop prediction
-                    BulletHitTime = Vector3.Distance(transform.position, TargetPos + PredictedPos) / BulletSpeed;
-                    Vector3 gravity = new Vector3(0, -Physics.gravity.y * .5f * BulletHitTime * BulletHitTime, 0);//Bulletdrop
-                    PredictedPos += gravity;
+                    float interceptTime = vintercept(HudControlPosition, BulletSpeed, TargetPos, RelativeTargetVel.normalized * GUN_TargetSpeedLerper);
+                    Vector3 PredictedPos = (TargetPos + (RelativeTargetVel.normalized * GUN_TargetSpeedLerper) * interceptTime);
 
-                    GUNLeadIndicator.position = TargetPos + PredictedPos;
+                    //Bulletdrop, technically incorrect implementation because it should be integrated into vintercept() but that'd be very difficult
+                    Vector3 gravity = new Vector3(0, -Physics.gravity.y * .5f * interceptTime * interceptTime, 0);
+                    // Vector3 TargetAccel = RelativeTargetVel - RelativeTargetVelLastFrame;
+                    // Vector3 accel = ((TargetAccel / Time.deltaTime) * 0.5f * interceptTime * interceptTime); // accel causes jitter
+                    PredictedPos += gravity /* + accel */;
+
+                    GUNLeadIndicator.position = PredictedPos;
                     //move lead indicator to match the distance of the rest of the hud
                     GUNLeadIndicator.localPosition = GUNLeadIndicator.localPosition.normalized * distance_from_head;
                     GUNLeadIndicator.rotation = Quaternion.LookRotation(GUNLeadIndicator.position - HUDControl.transform.position, VehicleTransform.transform.up);//This makes it not stretch when off to the side by fixing the rotation.
@@ -476,31 +565,42 @@ namespace SaccFlightAndVehicles
             }
             /////////////////
         }
-        private void FindSelf()
+
+        //not mine
+        float vintercept(Vector3 fireorg, float missilespeed, Vector3 tgtorg, Vector3 tgtvel)
         {
-            int x = 0;
-            foreach (UdonSharpBehaviour usb in EntityControl.Dial_Functions_R)
+            if (missilespeed <= 0)
+                return (tgtorg - fireorg).magnitude / missilespeed;
+
+            float tgtspd = tgtvel.magnitude;
+            Vector3 dir = fireorg - tgtorg;
+            float d = dir.magnitude;
+            float a = missilespeed * missilespeed - tgtspd * tgtspd;
+            float b = 2 * Vector3.Dot(dir, tgtvel);
+            float c = -d * d;
+
+            float t = 0;
+            if (a == 0)
             {
-                if (this == usb)
-                {
-                    DialPosition = x;
-                    return;
-                }
-                x++;
+                if (b == 0)
+                    return 0f;
+                else
+                    t = -c / b;
             }
-            LeftDial = true;
-            x = 0;
-            foreach (UdonSharpBehaviour usb in EntityControl.Dial_Functions_L)
+            else
             {
-                if (this == usb)
-                {
-                    DialPosition = x;
-                    return;
-                }
-                x++;
+                float s0 = b * b - 4 * a * c;
+                if (s0 <= 0)
+                    return 0f;
+                float s = Mathf.Sqrt(s0);
+                float div = 1.0f / (2f * a);
+                float t1 = -(s + b) * div;
+                float t2 = (s - b) * div;
+                if (t1 <= 0 && t2 <= 0)
+                    return 0f;
+                t = (t1 > 0 && t2 > 0) ? Mathf.Min(t1, t2) : Mathf.Max(t1, t2);
             }
-            DialPosition = -999;
-            Debug.LogWarning("DFUNC_Gun: Can't find self in dial functions");
+            return t;
         }
         public void SetBoolOn()
         {
@@ -514,19 +614,15 @@ namespace SaccFlightAndVehicles
         }
         public void KeyboardInput()
         {
-            if (LeftDial)
+            if (PassengerFunctionsControl)
             {
-                if (EntityControl.LStickSelection == DialPosition)
-                { EntityControl.LStickSelection = -1; }
-                else
-                { EntityControl.LStickSelection = DialPosition; }
+                if (LeftDial) PassengerFunctionsControl.ToggleStickSelectionLeft(this);
+                else PassengerFunctionsControl.ToggleStickSelectionRight(this);
             }
             else
             {
-                if (EntityControl.RStickSelection == DialPosition)
-                { EntityControl.RStickSelection = -1; }
-                else
-                { EntityControl.RStickSelection = DialPosition; }
+                if (LeftDial) EntityControl.ToggleStickSelectionLeft(this);
+                else EntityControl.ToggleStickSelectionRight(this);
             }
         }
     }

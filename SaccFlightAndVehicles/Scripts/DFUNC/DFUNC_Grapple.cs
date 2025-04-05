@@ -1,4 +1,5 @@
-﻿
+
+using TMPro;
 using UdonSharp;
 using UnityEngine;
 using VRC.SDKBase;
@@ -16,7 +17,6 @@ namespace SaccFlightAndVehicles
         public GameObject Dial_Funcon;
         public float HookSpeed = 300f;
         public float SwingStrength = 20f;
-        [System.NonSerialized] public SaccFlightAndVehicles.SaccEntity EntityControl;
         private Rigidbody VehicleRB;
         [Tooltip("Hook launches from here, in this transform's forward direction")]
         public Transform HookLaunchPoint;
@@ -49,18 +49,27 @@ namespace SaccFlightAndVehicles
         public AudioSource HookReelIn;
         public GameObject[] EnableOnSelect;
         public bool HandHeldGunMode;
+        [Tooltip("Using SaccEntity's Custom pickup system?")]
+        public bool CustomPickupMode = false;
         [Tooltip("Apply force at player instead of gun (prevent player from 'pulling' themself faster for competitive)")]
         public bool DisablePulling = false;
         [Tooltip("If player drops gun in the air, teleport it to them until they land?")]
         public bool MoveGunToSelfOnAirDrop = true;
         [Tooltip("How heavy the player is for interactions with rigidbodies")]
         public float PlayerMass = 150f;
-        [Tooltip("Disable these objects whilst object is held (SaccFlight?)")]
+        [Tooltip("Disable these objects locally whilst object is held (SaccFlight?)")]
         public GameObject[] DisableOnPickup;
+        [Tooltip("Ensable these objects locally whilst object is held")]
+        public GameObject[] EnableOnPickup;
         [Tooltip("Object that points towards launch direction")]
         public Transform TargetingLaser;
         private float HookLaunchTime;
         public Transform PredictedHitPoint;
+        public bool OnlyFireIfTargetPredicted = false;
+        private float LastPredictedHitTime;
+        private Vector3 LastPredictedHitPoint;
+        private bool HitPredicted = false;
+        private bool AutoTargeting = false;
         public bool KeyboardSelectMode = false;
         [Tooltip("Run an event on objects that the grappling hook hits?")]
         public bool RunEventOnTargets = false;
@@ -69,6 +78,15 @@ namespace SaccFlightAndVehicles
         [Tooltip("Name of event to run")]
         public string HitEventName = "_interact";
         public string HitEventName_Trigger = "_interact";
+        [Tooltip("If you'd like to use a rigidbody for movement, put one in here")]
+        public Rigidbody HandHeldRBMode_RB;
+        [SerializeField] private float AutoTargetTime = 0.2f;
+        [SerializeField] private float AutoTargetAngle = 25f;
+        public UdonSharpBehaviour[] GrappleEventCallbacks;
+        [System.NonSerializedAttribute] public bool LeftDial = false;
+        [System.NonSerializedAttribute] public int DialPosition = -999;
+        [System.NonSerializedAttribute] public SaccEntity EntityControl;
+        [System.NonSerializedAttribute] public SAV_PassengerFunctionsController PassengerFunctionsControl;
         private float AprHookFlyTime;
         private bool DoHitPrediction;
         private Vector3 HookStartPos;
@@ -78,37 +96,39 @@ namespace SaccFlightAndVehicles
         private GameObject HookedGameObject;
         private Rigidbody HookedRB;
         private VRC_Pickup EntityPickup;
-        private bool InVr;
+        private bool InVR;
         private VRCPlayerApi localPlayer;
-        private SaccFlightAndVehicles.SaccEntity HookedEntity;
+        private SaccEntity HookedEntity;
         //these 2 variables are only used if TwoWayForces_LocalForceMode is true
         private bool NonLocalAttached;//if you are in a vehicle that is attached
         private bool PlayReelIn = true;
         private bool Occupied = false;
-        private bool LeftDial = false;
-        private int DialPosition = -999;
+        bool KeepingECAwake;
         private bool KeepingHEAwake = false;
         private bool Overriding_DisallowOwnerShipTransfer = false;
         private Vector3 PredictedHitPointStartScale;
         private Vector3 HoldHeight;
+        private bool TriggerDesktop;
         public override void OnDeserialization()
         {
             if (_HookLaunched != _HookLaunchedPrev)
             {
                 HookLaunched = _HookLaunchedPrev = _HookLaunched;
             }
-            if (_HookAttachPoint != _HookAttachPointPrev)
-            {
-                HookAttachPoint = _HookAttachPointPrev = _HookAttachPoint;
-            }
+            HookAttachPoint = _HookAttachPoint;
         }
-        private Vector3 _HookAttachPointPrev;
+        private Vector3 _HookAttachPointLocal;
         [UdonSynced] private Vector3 _HookAttachPoint;
         public Vector3 HookAttachPoint
         {
             set
             {
-                if (!Initialized || !_HookLaunched) { _HookAttachPoint = value; return; }
+                if (!Initialized || !_HookLaunched || value == -Vector3.zero)
+                {
+                    if (IsOwner) { _HookAttachPoint = value; }
+                    _HookAttachPointLocal = value;
+                    return;
+                }
 
                 //first just check if there's a collider at the exact coordinates
                 Vector3 rayDir = (value - HookLaunchPoint.position).normalized * .1f;
@@ -117,8 +137,14 @@ namespace SaccFlightAndVehicles
 
                 float spheresize = SphereCastAccuracy;
                 int hitlen = 0;
-                RaycastHit[] hits = new RaycastHit[0];
+                RaycastHit[] hits;
                 bool hitSelf = false;
+
+                HookedTransform = null;
+                float nearestDist = float.MaxValue;
+                SaccEntity nearestEntity = null;
+                Collider nearestCollider = null;
+                Vector3 closestPoint = value;
                 while (spheresize < 17 && hitlen == 0 && !hitSelf)
                 {
                     hits = Physics.SphereCastAll(value, spheresize, Vector3.up, 0, HookLayers, QueryTriggerInteraction.Ignore);
@@ -134,98 +160,29 @@ namespace SaccFlightAndVehicles
                     hitlen = hits.Length;
                     if (hitlen > 0)
                     {
-                        HookedTransform = null;
                         if (Dial_Funcon) { Dial_Funcon.SetActive(true); }
                         foreach (RaycastHit hit in hits)
                         {
                             hitSelf = false;
                             if (hit.collider)
                             {
-                                float NearestDist = float.MaxValue;
-                                float tempdist = Vector3.Distance(hit.collider.ClosestPoint(value), value);
-                                if (tempdist < NearestDist)
+                                float tempdist = nearestDist;
+                                Vector3 tempClosestPoint = value;
+                                MeshCollider mesh = hit.collider.GetComponent<MeshCollider>();
+                                if (!mesh || mesh.convex)
+                                    tempClosestPoint = hit.collider.ClosestPoint(tempClosestPoint);
+                                tempdist = Vector3.Distance(tempClosestPoint, value);
+                                if (tempdist < nearestDist)
                                 {
-                                    if (HookedEntity) { UndoHookOverrides(); }
                                     if (hit.collider.attachedRigidbody)
                                     {
-                                        HookedEntity = hit.collider.attachedRigidbody.GetComponent<SaccFlightAndVehicles.SaccEntity>();
-                                        if (HookedEntity)
-                                        {
-                                            if (HookedEntity == EntityControl) { hitSelf = true; continue; } //skip if raycast finds own vehicle
-                                            else
-                                            {
-                                                if (!KeepingHEAwake)
-                                                {
-                                                    KeepingHEAwake = true;
-                                                    HookedEntity.KeepAwake_++;
-                                                    HookedEntity.SendEventToExtensions("SFEXT_L_GrappleAttach");
-                                                }
-                                            }
-                                        }
+                                        SaccEntity checkEntity = hit.collider.attachedRigidbody.GetComponent<SaccEntity>();
+                                        if (checkEntity == EntityControl) continue;
+                                        else nearestEntity = checkEntity;
                                     }
-                                    else { HookedEntity = null; }
-                                    NearestDist = tempdist;
-                                    HookedCollider = hit.collider;
-                                    HookedGameObject = hit.collider.gameObject;
-                                    HookedTransform = hit.collider.transform;
-                                    HookedTransformOffset = HookedTransform.InverseTransformPoint(hit.collider.ClosestPoint(value));
-                                    if (TwoWayForces && (!HookedEntity || (!TwoWayForces_DisableIfOccupied || (!HookedEntity.Occupied && (!HookedEntity.EntityPickup || !HookedEntity.EntityPickup.IsHeld)))))
-                                    {
-                                        HookedRB = HookedCollider.attachedRigidbody;
-                                        if (HookedRB)
-                                        {
-                                            if (HoldTargetUpright)
-                                            {
-                                                HookedTransform = HookedRB.transform;
-                                                Vector3 targCoMPos = HookedRB.position + HookedRB.centerOfMass;
-                                                Vector3 abovedist = (HookedTransform.up * Vector3.Distance(targCoMPos, HookLaunchPoint.position) /* / 2f */);
-                                                Vector3 raypoint = targCoMPos + abovedist;
-                                                Vector3 raydir = targCoMPos - raypoint;
-                                                RaycastHit hit2;
-                                                if (Physics.Raycast(raypoint, raydir, out hit2, abovedist.magnitude + 10f, HookLayers, QueryTriggerInteraction.Ignore))
-                                                {
-                                                    HookedTransformOffset = HookedTransform.InverseTransformPoint(hit2.point);
-                                                }
-                                            }
-                                            if (TwoWayForces_LocalForceMode)
-                                            {
-                                                if (IsOwner)
-                                                {
-                                                    if ((!EntityPickup || !EntityPickup.IsHeld) && (!HookedEntity || (!HookedEntity.Occupied && (!HookedEntity.EntityPickup || !HookedEntity.EntityPickup.IsHeld))))
-                                                    {
-                                                        if (!Overriding_DisallowOwnerShipTransfer)
-                                                        {
-                                                            Networking.SetOwner(Networking.LocalPlayer, HookedRB.gameObject);
-                                                        }
-                                                    }
-                                                }
-                                                else
-                                                {
-                                                    if (Networking.LocalPlayer.IsOwner(HookedRB.gameObject))
-                                                    {
-                                                        NonLocalAttached = true;
-                                                    }
-                                                }
-                                            }
-                                            else
-                                            {
-                                                if (IsOwner && !Overriding_DisallowOwnerShipTransfer)
-                                                {
-                                                    Networking.SetOwner(Networking.LocalPlayer, HookedRB.gameObject);
-                                                }
-                                            }
-                                            //people cant take ownership while vehicle is being held.
-                                            //localforcemode is only active if someone is in the vehicle when its grabbed
-                                            if (HookedEntity && (!TwoWayForces_LocalForceMode || (!HookedEntity.Occupied && (!HookedEntity.EntityPickup || !HookedEntity.EntityPickup.IsHeld))))
-                                            {
-                                                if (!Overriding_DisallowOwnerShipTransfer)
-                                                {
-                                                    HookedEntity.SetProgramVariable("DisallowOwnerShipTransfer", (int)HookedEntity.GetProgramVariable("DisallowOwnerShipTransfer") + 1);
-                                                    Overriding_DisallowOwnerShipTransfer = true;
-                                                }
-                                            }
-                                        }
-                                    }
+                                    closestPoint = tempClosestPoint;
+                                    nearestCollider = hit.collider;
+                                    nearestDist = tempdist;
                                 }
                             }
                         }
@@ -239,15 +196,105 @@ namespace SaccFlightAndVehicles
                         HookWorldPos(value);
                     }
                 }
+
+                if (nearestDist < float.MaxValue)
+                {
+                    if (HookedEntity) { UndoHookOverrides(); }
+                    if (nearestEntity)
+                    {
+                        HookedEntity = nearestEntity;
+                        if (!KeepingHEAwake)
+                        {
+                            KeepingHEAwake = true;
+                            HookedEntity.KeepAwake_++;
+                            HookedEntity.SendEventToExtensions("SFEXT_L_GrappleAttach");
+                        }
+                    }
+
+                    HookedCollider = nearestCollider;
+                    HookedGameObject = nearestCollider.gameObject;
+                    HookedTransform = nearestCollider.transform;
+                    HookedTransformOffset = HookedTransform.InverseTransformPoint(closestPoint);
+                    if (TwoWayForces && (!HookedEntity || !TwoWayForces_DisableIfOccupied || (!HookedEntity.Occupied && !HookedEntity.CustomPickup_Synced_isHeld && (!HookedEntity.EntityPickup || !HookedEntity.EntityPickup.IsHeld))))
+                    {
+                        HookedRB = HookedCollider.attachedRigidbody;
+                        if (HookedRB)
+                        {
+                            if (HoldTargetUpright)
+                            {
+                                HookedTransform = HookedRB.transform;
+                                Vector3 targCoMPos = HookedRB.position + HookedRB.centerOfMass;
+                                Vector3 abovedist = (HookedTransform.up * Vector3.Distance(targCoMPos, HookLaunchPoint.position) /* / 2f */);
+                                Vector3 raypoint = targCoMPos + abovedist;
+                                Vector3 raydir = targCoMPos - raypoint;
+                                RaycastHit hit2;
+                                if (Physics.Raycast(raypoint, raydir, out hit2, abovedist.magnitude + 10f, HookLayers, QueryTriggerInteraction.Ignore))
+                                {
+                                    HookedTransformOffset = HookedTransform.InverseTransformPoint(hit2.point);
+                                }
+                            }
+                            if (TwoWayForces_LocalForceMode)
+                            {
+                                if (IsOwner)
+                                {
+                                    if ((!EntityPickup || !EntityPickup.IsHeld) && (!HookedEntity || (!HookedEntity.Occupied && !EntityControl.CustomPickup_Synced_isHeld && (!HookedEntity.EntityPickup || !HookedEntity.EntityPickup.IsHeld))))
+                                    {
+                                        if (!Overriding_DisallowOwnerShipTransfer)
+                                        {
+                                            Networking.SetOwner(Networking.LocalPlayer, HookedRB.gameObject);
+                                        }
+                                    }
+                                }
+                                else
+                                {
+                                    if (Networking.LocalPlayer.IsOwner(HookedRB.gameObject))
+                                    {
+                                        NonLocalAttached = true;
+                                    }
+                                }
+                            }
+                            else
+                            {
+                                if (IsOwner && !Overriding_DisallowOwnerShipTransfer)
+                                {
+                                    Networking.SetOwner(Networking.LocalPlayer, HookedRB.gameObject);
+                                }
+                            }
+                            //people cant take ownership while vehicle is being held.
+                            //localforcemode is only active if someone is in the vehicle when its grabbed
+                            if (HookedEntity && (!TwoWayForces_LocalForceMode || (!HookedEntity.Occupied && !EntityControl.CustomPickup_Synced_isHeld && (!HookedEntity.EntityPickup || !HookedEntity.EntityPickup.IsHeld))))
+                            {
+                                if (!Overriding_DisallowOwnerShipTransfer)
+                                {
+                                    HookedEntity.SetProgramVariable("DisallowOwnerShipTransfer", (int)HookedEntity.GetProgramVariable("DisallowOwnerShipTransfer") + 1);
+                                    Overriding_DisallowOwnerShipTransfer = true;
+                                }
+                            }
+                        }
+                    }
+                }
+
                 Vector3 hookedpoint = HookedTransform.TransformPoint(HookedTransformOffset);
-                HookLength = Vector3.Distance(HookLaunchPoint.position, hookedpoint);
+                if (HandHeldGunMode && DisablePulling || HandHeldRBMode_RB)
+                { HookLength = Vector3.Distance(localPlayer.GetPosition() + HoldHeight, _HookAttachPointLocal); }
+                else
+                { HookLength = Vector3.Distance(HookLaunchPoint.position, hookedpoint); }
                 HookAttached = true;
+                firstGrappleFrame = true;
                 SkippedFrames = 1;
                 SetHookPos();
                 HookAttach.Play();
-                _HookAttachPoint = hookedpoint;
+                if (!KeepingECAwake)
+                {
+                    KeepingECAwake = true;
+                    EntityControl.KeepAwake_++;
+                }
+                EntityControl.SendEventToExtensions("SFEXT_G_GrappleActive");
+                DoEventCallbacks("DFUNC_Grapple_Attached");
+                _HookAttachPointLocal = hookedpoint;
+                if (IsOwner) { _HookAttachPoint = hookedpoint; }
             }
-            get => _HookAttachPoint;
+            get => _HookAttachPointLocal;
         }
         private void HookWorldPos(Vector3 val)
         {
@@ -279,7 +326,7 @@ namespace SaccFlightAndVehicles
                         Rope_Line.SetPosition(1, HookRopePoint.position);
                     }
                 }
-                SendCustomEventDelayedFrames(nameof(SetHookPos), 1);
+                SendCustomEventDelayedFrames(nameof(SetHookPos), 1, VRC.Udon.Common.Enums.EventTiming.LateUpdate);
             }
         }
         private Quaternion HookStartRot;
@@ -317,6 +364,11 @@ namespace SaccFlightAndVehicles
             Initialized = true;
             if (!ForceApplyPoint) { ForceApplyPoint = HookLaunchPoint; }
             VehicleRB = EntityControl.GetComponent<Rigidbody>();
+            if (HandHeldRBMode_RB)
+            {
+                VehicleRB = HandHeldRBMode_RB;
+                // if (HandHeldRBMode_HandleRB) { HandHeldRBMode_RB.gameObject.SetActive(false); }
+            }
             IsOwner = (bool)EntityControl.GetProgramVariable("IsOwner");
             EntityPickup = EntityControl.GetComponent<VRC_Pickup>();
             HookedTransform = transform;//avoid null
@@ -325,10 +377,9 @@ namespace SaccFlightAndVehicles
             HookStartRot = Hook.localRotation;
             if (PredictedHitPoint) { PredictedHitPointStartScale = PredictedHitPoint.localScale; }
             localPlayer = Networking.LocalPlayer;
-            InVr = localPlayer.IsUserInVR();
+            InVR = EntityControl.InVR;
             if (Dial_Funcon) Dial_Funcon.SetActive(false);
             foreach (GameObject obj in EnableOnSelect) { obj.SetActive(false); }
-            FindSelf();
             gameObject.SetActive(true);
             SendCustomEventDelayedSeconds(nameof(DisableThis), 10f);
             InitializeChangeableValues();
@@ -344,7 +395,19 @@ namespace SaccFlightAndVehicles
             Rope_Line.gameObject.SetActive(true);
             HookLaunchTime = Time.time;
             HookLaunchRot = Hook.rotation;
-            LaunchVec = ((HandHeldGunMode ? localPlayer.GetVelocity() : VehicleRB ? VehicleRB.velocity : Vector3.zero)) + (HookLaunchPoint.forward * HookSpeed);
+            LaunchVec = ((HandHeldGunMode && (!VehicleRB || VehicleRB.isKinematic)) || (HandHeldRBMode_RB && (!VehicleRB.gameObject.activeSelf || VehicleRB.isKinematic)) ? localPlayer.GetVelocity() : VehicleRB ? VehicleRB.velocity : Vector3.zero) + (HookLaunchPoint.forward * HookSpeed);
+            //make grappling more forgiving by grappling the last targeted point if you're going to miss
+            if (DoHitPrediction)
+            {
+                if (!HitPredicted && Time.time - LastPredictedHitTime < AutoTargetTime)
+                {
+                    Vector3 newLaunchVec = (LastPredictedHitPoint - HookLaunchPoint.position).normalized;
+                    if (Vector3.Angle(LaunchVec, newLaunchVec) < AutoTargetAngle)
+                    {
+                        LaunchVec = newLaunchVec * LaunchVec.magnitude;
+                    }
+                }
+            }
             LaunchSpeed = LaunchVec.magnitude;
             Hook.parent = EntityControl.transform.parent;
             Hook.position = HookLaunchPoint.position;
@@ -386,10 +449,9 @@ namespace SaccFlightAndVehicles
                             UdonSharpBehaviour hitScript;
                             Rigidbody ARB = hookhit.collider.attachedRigidbody;
                             if (ARB)
-                            { Debug.Log("ASS"); hitScript = (UdonSharpBehaviour)ARB.GetComponent(typeof(UdonSharpBehaviour)); }
+                            { hitScript = (UdonSharpBehaviour)ARB.GetComponent(typeof(UdonSharpBehaviour)); }
                             else
-                            { Debug.Log("TITS"); hitScript = (UdonSharpBehaviour)hookhit.collider.gameObject.GetComponent(typeof(UdonSharpBehaviour)); }
-                            Debug.Log(hitScript);
+                            { hitScript = (UdonSharpBehaviour)hookhit.collider.gameObject.GetComponent(typeof(UdonSharpBehaviour)); }
                             if (hitScript) { hitScript.SendCustomEvent(HitEventName); }
                         }
                         HookAttachPoint = hookhit.point;
@@ -397,9 +459,9 @@ namespace SaccFlightAndVehicles
                         RequestSerialization();
                         Hook.position = hookhit.point;
                         if (HandHeldGunMode && DisablePulling)
-                        { HookLength = Vector3.Distance(localPlayer.GetPosition() + HoldHeight, _HookAttachPoint); }
+                        { HookLength = Vector3.Distance(localPlayer.GetPosition() + HoldHeight, _HookAttachPointLocal); }
                         else
-                        { HookLength = Vector3.Distance(HookLaunchPoint.position, Hook.position); }
+                        { HookLength = Vector3.Distance(HookLaunchPoint.position, _HookAttachPointLocal); }
                         return;
                     }
                 }
@@ -411,6 +473,8 @@ namespace SaccFlightAndVehicles
                 if (HookLength > HookRange)
                 {
                     HookLaunched = false;
+                    HookAttachPoint = -Vector3.zero;
+                    if (OnlyFireIfTargetPredicted) { TriggerLastFrame = false; }
                     if (!Occupied) { SendCustomEventDelayedSeconds(nameof(DisableThis), 2f); }
                     RequestSerialization();
                     return;
@@ -425,7 +489,7 @@ namespace SaccFlightAndVehicles
                 Rope_Line.SetPosition(0, RopeBasePoint.position);
                 Rope_Line.SetPosition(1, HookRopePoint.position);
             }
-            SendCustomEventDelayedFrames(nameof(HookFlyLoop), 1);
+            SendCustomEventDelayedFrames(nameof(HookFlyLoop), 1, VRC.Udon.Common.Enums.EventTiming.LateUpdate);
         }
         private void UndoHookOverrides()
         {
@@ -440,24 +504,33 @@ namespace SaccFlightAndVehicles
             if (Dial_Funcon) { Dial_Funcon.SetActive(false); }
             Rope_Line.gameObject.SetActive(false);
             Hook.parent = HookParentStart;
-            HookAttached = false;
+            if (HookAttached)
+            {
+                EntityControl.SendEventToExtensions("SFEXT_G_GrappleInactive");
+                DoEventCallbacks("DFUNC_Grapple_Detached");
+                HookAttached = false;
+            }
             NonLocalAttached = false;
             Hook.localPosition = HookStartPos;
             Hook.localRotation = HookStartRot;
+            if (KeepingECAwake)
+            {
+                KeepingECAwake = false;
+                EntityControl.KeepAwake_--;
+            }
             if (HookedEntity)
             {
-                HookedEntity.SendEventToExtensions("SFEXT_L_GrappleDetach");
                 if (KeepingHEAwake)
                 {
                     KeepingHEAwake = false;
                     HookedEntity.KeepAwake_--;
                 }
-                UndoHookOverrides();
                 if (HookedEntity.Using)
                 {
                     Networking.SetOwner(Networking.LocalPlayer, HookedEntity.gameObject);
-                    HookedEntity.SendEventToExtensions("SFEXT_L_SetEngineOn");
                 }
+                HookedEntity.SendEventToExtensions("SFEXT_L_GrappleDetach");
+                UndoHookOverrides();
                 HookedEntity = null;
             }
             if (PlayReelIn && HookReelIn) { HookReelIn.Play(); }
@@ -473,109 +546,132 @@ namespace SaccFlightAndVehicles
         }
         private int SkippedFrames; // delete me if bug is fixed
         private Vector3 PlayerPosLast; // delete me if bug is fixed
+        private bool firstGrappleFrame;
         private void FixedUpdate()
         {
-            if (HookAttached && IsOwner)
+            if (IsOwner)
             {
-                if ((HookedCollider && !HookedCollider.enabled)
-                 || !HookedTransform.gameObject.activeInHierarchy
-                 || (HookedEntity && (HookedEntity.dead)))
+                if (HookAttached)
                 {
-                    HookLaunched = false;
-                    RequestSerialization(); return;
-                }
-                Hook.position = _HookAttachPoint = HookedTransform.TransformPoint(HookedTransformOffset);
-
-                float dist;
-                Vector3 forceDirection;
-                Vector3 holdpos;
-                int _skippedFrames = 1;
-                Vector3 playerpos = localPlayer.GetPosition();
-                // this 'SkippedFrames' business is to workaround this bug. It's not perfect but it works well enough
-                // https://feedback.vrchat.com/vrchat-udon-closed-alpha-feedback/p/vrcplayerapis-physics-values-are-only-updated-in-update
-                // Remove if fixed
-                if (HandHeldGunMode)
-                {
-                    if (playerpos == PlayerPosLast)
+                    if ((HookedCollider && !HookedCollider.enabled)
+                     || !HookedTransform.gameObject.activeInHierarchy
+                     || (HookedEntity && HookedEntity.dead))
                     {
-                        if (Time.fixedDeltaTime * (SkippedFrames + 1) > 0.0501f) { return; }
-                        SkippedFrames = SkippedFrames++; return;
+                        HookLaunched = false;
+                        HookAttachPoint = -Vector3.zero;
+                        RequestSerialization(); return;
                     }
-                    else
-                    {
-                        _skippedFrames = SkippedFrames;
-                        SkippedFrames = 1;
-                    }
-                    PlayerPosLast = playerpos;
-                }
-                if (HandHeldGunMode && DisablePulling)
-                {
-                    holdpos = localPlayer.GetPosition() + HoldHeight;
-                    dist = Vector3.Distance(holdpos, _HookAttachPoint);
-                    forceDirection = (_HookAttachPoint - holdpos).normalized * _skippedFrames;//simpler just to pre-multiply this than do it later
-                }
-                else
-                {
-                    holdpos = HookLaunchPoint.position;
-                    dist = Vector3.Distance(holdpos, _HookAttachPoint);
-                    forceDirection = (_HookAttachPoint - HookLaunchPoint.position).normalized * _skippedFrames;//simpler just to pre-multiply this than do it later
-                }
-                float PullReduction = 0f;
+                    Hook.position = _HookAttachPointLocal = HookedTransform.TransformPoint(HookedTransformOffset);
 
-                float SwingForce = (dist - HookLength) / _skippedFrames;//this measures the difference between frames so it has 'deltatime' including skipped frames built in, so we need to remove the pre-multiplication
-                if (SwingForce < 0)
-                {
-                    PullReduction = SwingForce;
-                    SwingForce = 0;
-                }
-                else { SwingForce *= SwingStrength; }
-                HookLength = Mathf.Min(dist, HookRange);
-
-                float WeightRatio = 1;
-
-                if (HookedRB && !HookedRB.isKinematic)
-                {
-                    if (HandHeldGunMode)
+                    float dist;
+                    Vector3 forceDirection;
+                    Vector3 holdpos;
+                    int _skippedFrames = 1;
+                    Vector3 playerpos = localPlayer.GetPosition();
+                    // this 'SkippedFrames' business is to workaround this bug. It's not perfect but it works well enough
+                    // https://feedback.vrchat.com/udon/p/vrcplayerapis-physics-values-are-only-updated-in-update
+                    // Remove if fixed
+                    if (HandHeldGunMode && !HandHeldRBMode_RB)
                     {
-                        WeightRatio = HookedRB.mass / (HookedRB.mass + PlayerMass);
-                    }
-                    else
-                    {
-                        if (!VehicleRB || VehicleRB.isKinematic)
-                        { WeightRatio = 0f; }
+                        if (playerpos == PlayerPosLast)
+                        {
+                            if (Time.fixedDeltaTime * (SkippedFrames + 1) > 0.0501f) { return; }
+                            SkippedFrames = SkippedFrames++; return;
+                        }
                         else
-                        { WeightRatio = HookedRB.mass / (HookedRB.mass + VehicleRB.mass); }
+                        {
+                            _skippedFrames = SkippedFrames;
+                            SkippedFrames = 1;
+                        }
+                        PlayerPosLast = playerpos;
                     }
-                    Vector3 forceDirection_HookedRB = -forceDirection;
-                    HookedRB.AddForceAtPosition((forceDirection_HookedRB * HookStrength * PullStrOverDist.Evaluate(dist) * Time.fixedDeltaTime + (forceDirection_HookedRB * SwingForce)) * (1f - WeightRatio), _HookAttachPoint, ForceMode.VelocityChange);
-                }
-                if (HandHeldGunMode)
-                {
-                    Vector3 newPlayerVelocity = localPlayer.GetVelocity() + (((forceDirection * HookStrength * Time.fixedDeltaTime) + (forceDirection * SwingForce)) * WeightRatio * PullStrOverDist.Evaluate(dist));
-#if UNITY_EDITOR
-                    //SetVelocity overrides all other forces in clientsim so we need to add gravity ourselves
-                    newPlayerVelocity += -Vector3.up * 9.81f * Time.fixedDeltaTime;
-#endif
-                    localPlayer.SetVelocity(newPlayerVelocity);
-                }
-                else if (VehicleRB)
-                {
-                    if (UseForceApplyPoint)
+                    if (HandHeldRBMode_RB && HandHeldRBMode_RB.gameObject.activeSelf)
                     {
-                        VehicleRB.AddForceAtPosition((forceDirection * HookStrength * PullStrOverDist.Evaluate(dist) * Time.fixedDeltaTime + (forceDirection * SwingForce) + (forceDirection * PullReduction * PullReductionStrength)) * WeightRatio, ForceApplyPoint.position, ForceMode.VelocityChange);
+                        holdpos = VehicleRB.position + HoldHeight;
+                        dist = Vector3.Distance(holdpos, _HookAttachPointLocal);
+                        forceDirection = (_HookAttachPointLocal - holdpos).normalized;
+                    }
+                    else if (HandHeldGunMode)
+                    {
+                        if (DisablePulling)
+                        {
+                            holdpos = localPlayer.GetPosition() + HoldHeight;
+                            dist = Vector3.Distance(holdpos, _HookAttachPointLocal);
+                            forceDirection = (_HookAttachPointLocal - holdpos).normalized * _skippedFrames;//simpler just to pre-multiply this than do it later
+                        }
+                        else
+                        {
+                            holdpos = HookLaunchPoint.position;
+                            dist = Vector3.Distance(holdpos, _HookAttachPointLocal);
+                            forceDirection = (_HookAttachPointLocal - holdpos).normalized * _skippedFrames;
+                        }
                     }
                     else
                     {
-                        VehicleRB.AddForce((forceDirection * HookStrength * PullStrOverDist.Evaluate(dist) * Time.fixedDeltaTime + (forceDirection * SwingForce) + (forceDirection * PullReduction * PullReductionStrength)) * WeightRatio, ForceMode.VelocityChange);
+                        holdpos = HookLaunchPoint.position;
+                        dist = Vector3.Distance(holdpos, _HookAttachPointLocal);
+                        forceDirection = (_HookAttachPointLocal - holdpos).normalized;
+                    }
+                    float PullReduction = 0f;
+
+                    float SwingForce = (dist - HookLength) / _skippedFrames;//this measures the difference between frames so it has 'deltatime' including skipped frames built in, so we need to remove the pre-multiplication
+                    if (firstGrappleFrame)
+                    {
+                        SwingForce = 0;
+                        firstGrappleFrame = false;
+                    }
+                    if (SwingForce < 0)
+                    {
+                        PullReduction = SwingForce;
+                        SwingForce = 0;
+                    }
+                    else { SwingForce *= SwingStrength; }
+                    HookLength = Mathf.Min(dist, HookRange);
+
+                    float WeightRatio = 1;
+                    if (HookedRB && !HookedRB.isKinematic)
+                    {
+                        if (HandHeldGunMode && !HandHeldRBMode_RB)
+                        {
+                            WeightRatio = HookedRB.mass / (HookedRB.mass + PlayerMass);
+                        }
+                        else
+                        {
+                            if (!VehicleRB || VehicleRB.isKinematic)
+                            { WeightRatio = 0f; }
+                            else
+                            { WeightRatio = HookedRB.mass / (HookedRB.mass + VehicleRB.mass); }
+                        }
+                        Vector3 forceDirection_HookedRB = -forceDirection;
+                        HookedRB.AddForceAtPosition((forceDirection_HookedRB * HookStrength * PullStrOverDist.Evaluate(dist) * Time.fixedDeltaTime + (forceDirection_HookedRB * SwingForce)) * (1f - WeightRatio), _HookAttachPointLocal, ForceMode.VelocityChange);
+                    }
+                    if (HandHeldGunMode && !HandHeldRBMode_RB)
+                    {
+                        Vector3 newPlayerVelocity = localPlayer.GetVelocity() + (((forceDirection * HookStrength * Time.fixedDeltaTime) + (forceDirection * SwingForce)) * WeightRatio * PullStrOverDist.Evaluate(dist));
+#if UNITY_EDITOR
+                        //SetVelocity overrides all other forces in clientsim so we need to add gravity ourselves
+                        newPlayerVelocity += -Vector3.up * 9.81f * Time.fixedDeltaTime;
+#endif
+                        localPlayer.SetVelocity(newPlayerVelocity);
+                    }
+                    else if (VehicleRB)
+                    {
+                        if (UseForceApplyPoint)
+                        {
+                            VehicleRB.AddForceAtPosition((forceDirection * HookStrength * PullStrOverDist.Evaluate(dist) * Time.fixedDeltaTime + (forceDirection * SwingForce) + (forceDirection * PullReduction * PullReductionStrength)) * WeightRatio, ForceApplyPoint.position, ForceMode.VelocityChange);
+                        }
+                        else
+                        {
+                            VehicleRB.AddForce((forceDirection * HookStrength * PullStrOverDist.Evaluate(dist) * Time.fixedDeltaTime + (forceDirection * SwingForce) + (forceDirection * PullReduction * PullReductionStrength)) * WeightRatio, ForceMode.VelocityChange);
+                        }
                     }
                 }
-
             }
             else if (NonLocalAttached)
             {
                 if (HookedRB)
                 {
-                    float dist = Vector3.Distance(HookLaunchPoint.position, _HookAttachPoint);
+                    float dist = Vector3.Distance(HookLaunchPoint.position, _HookAttachPointLocal);
                     float PullReduction = 0f;
 
                     float SwingForce = dist - HookLength;
@@ -587,7 +683,7 @@ namespace SaccFlightAndVehicles
                     else { SwingForce *= SwingStrength; }
                     HookLength = dist;
 
-                    Vector3 forceDirection = (_HookAttachPoint - HookLaunchPoint.position).normalized;
+                    Vector3 forceDirection = (_HookAttachPointLocal - HookLaunchPoint.position).normalized;
 
                     float WeightRatio;
                     if (HandHeldGunMode)
@@ -601,8 +697,8 @@ namespace SaccFlightAndVehicles
                         else
                         { WeightRatio = HookedRB.mass / (HookedRB.mass + VehicleRB.mass); }
                     }
-                    Vector3 forceDirection_HookedRB = (HookLaunchPoint.position - _HookAttachPoint).normalized;
-                    HookedRB.AddForceAtPosition((forceDirection_HookedRB * HookStrength * PullStrOverDist.Evaluate(dist) * Time.deltaTime + (forceDirection_HookedRB * SwingForce) + (forceDirection_HookedRB * PullReduction * PullReductionStrength)) * (1f - WeightRatio), _HookAttachPoint, ForceMode.VelocityChange);
+                    Vector3 forceDirection_HookedRB = (HookLaunchPoint.position - _HookAttachPointLocal).normalized;
+                    HookedRB.AddForceAtPosition((forceDirection_HookedRB * HookStrength * PullStrOverDist.Evaluate(dist) * Time.deltaTime + (forceDirection_HookedRB * SwingForce) + (forceDirection_HookedRB * PullReduction * PullReductionStrength)) * (1f - WeightRatio), _HookAttachPointLocal, ForceMode.VelocityChange);
                 }
             }
         }
@@ -611,12 +707,16 @@ namespace SaccFlightAndVehicles
             if (IsOwner)
             {
                 if (_HookLaunched)
-                { HookLaunched = false; RequestSerialization(); }
+                {
+                    HookLaunched = false;
+                    HookAttachPoint = -Vector3.zero;
+                    RequestSerialization();
+                }
             }
             //make sure this happens because the one in the HookLaunched Set may not be reliable because synced variables are faster than events
             SendCustomEventDelayedSeconds(nameof(DisableThis), 2f);
         }
-        public void DisableThis() { if (!Occupied && !_HookLaunched && (!EntityPickup || !EntityPickup.IsHeld)) { gameObject.SetActive(false); } }
+        public void DisableThis() { if (!Occupied && !_HookLaunched && (!EntityPickup || !EntityPickup.IsHeld) && !EntityControl.CustomPickup_Synced_isHeld) { gameObject.SetActive(false); } }
         public void SFEXT_O_PilotExit()
         {
             Selected = false;
@@ -625,7 +725,7 @@ namespace SaccFlightAndVehicles
                 if (_HookLaunched)
                 { ResetHook(); }
             }
-            if (!InVr && !KeyboardSelectMode) { foreach (GameObject obj in EnableOnSelect) { obj.SetActive(false); } }
+            if (!InVR && !KeyboardSelectMode) { foreach (GameObject obj in EnableOnSelect) { obj.SetActive(false); } }
         }
         public void SFEXT_O_TakeOwnership()
         {
@@ -636,10 +736,18 @@ namespace SaccFlightAndVehicles
         public void SFEXT_O_LoseOwnership()
         {
             IsOwner = false;
+            _HookLaunchedPrev = _HookLaunched;
         }
         public void SFEXT_O_PilotEnter()
         {
-            if (!InVr && !KeyboardSelectMode) { foreach (GameObject obj in EnableOnSelect) { obj.SetActive(true); } }
+            InVR = EntityControl.InVR;
+            if (!InVR && !KeyboardSelectMode) { foreach (GameObject obj in EnableOnSelect) { obj.SetActive(true); } }
+            //take ownership of whatever we're attached to if applicable
+            if (TwoWayForces && !TwoWayForces_LocalForceMode)
+            {
+                if (HookAttached && HookedEntity && (!HookedEntity.Occupied || !TwoWayForces_DisableIfOccupied))
+                { Networking.SetOwner(localPlayer, HookedEntity.gameObject); }
+            }
         }
         public void SFEXT_G_PilotEnter()
         {
@@ -648,18 +756,21 @@ namespace SaccFlightAndVehicles
         }
         public void SFEXT_G_RespawnButton()
         {
+            if (IsOwner)
+            {
+                PlayReelIn = false;
+                HookLaunched = false;
+                PlayReelIn = true;
+                HookAttachPoint = -Vector3.zero;
+                RequestSerialization();
+            }
             gameObject.SetActive(true);
             SendCustomEventDelayedSeconds(nameof(DisableThis), 2f);
         }
-        public void SFEXT_O_RespawnButton()
-        {
-            PlayReelIn = false;
-            HookLaunched = false;
-            PlayReelIn = true;
-            RequestSerialization();
-        }
+
         public void SFEXT_G_PilotExit()
         {
+            TriggerDesktop = false;
             Occupied = false;
             if (!_HookLaunched)
             { SendCustomEventDelayedSeconds(nameof(DisableThis), 2f); }
@@ -668,20 +779,8 @@ namespace SaccFlightAndVehicles
         {
             if (KeyboardSelectMode)
             {
-                if (LeftDial)
-                {
-                    if (EntityControl.LStickSelection == DialPosition)
-                    { EntityControl.LStickSelection = -1; }
-                    else
-                    { EntityControl.LStickSelection = DialPosition; }
-                }
-                else
-                {
-                    if (EntityControl.RStickSelection == DialPosition)
-                    { EntityControl.RStickSelection = -1; }
-                    else
-                    { EntityControl.RStickSelection = DialPosition; }
-                }
+                if (LeftDial) EntityControl.ToggleStickSelectionLeft(this);
+                else EntityControl.ToggleStickSelectionRight(this);
             }
             else
             {
@@ -690,26 +789,31 @@ namespace SaccFlightAndVehicles
         }
         public void SFEXT_O_OnPickup()
         {
+            TriggerLastFrame = true;
             HoldHeight = localPlayer.GetTrackingData(VRCPlayerApi.TrackingDataType.Head).position - localPlayer.GetPosition();//imrpove this if there's ever a way to get player avatar height or something
             if (_HookLaunched) { ResetHook(); }
             SFEXT_O_PilotEnter();
             for (int i = 0; i < DisableOnPickup.Length; i++)
-            {
-                if (DisableOnPickup[i]) { DisableOnPickup[i].SetActive(false); }
-            }
+            { DisableOnPickup[i].SetActive(false); }
+            for (int i = 0; i < EnableOnPickup.Length; i++)
+            { EnableOnPickup[i].SetActive(true); }
             if (GrappleAnimator) { GrappleAnimator.SetBool("held", true); }
         }
         public void SFEXT_O_OnDrop()
         {
             SFEXT_O_PilotExit();
             if (_HookLaunched)
-            { HookLaunched = false; RequestSerialization(); }
-            PredictionOff();
+            {
+                HookLaunched = false;
+                HookAttachPoint = -Vector3.zero;
+                RequestSerialization();
+            }
+            PredictionOff(true);
             SendCustomEventDelayedSeconds(nameof(DisableThis), 2f);
             for (int i = 0; i < DisableOnPickup.Length; i++)
-            {
-                if (DisableOnPickup[i]) { DisableOnPickup[i].SetActive(true); }
-            }
+            { DisableOnPickup[i].SetActive(true); }
+            for (int i = 0; i < EnableOnPickup.Length; i++)
+            { EnableOnPickup[i].SetActive(false); }
             if (GrappleAnimator) { GrappleAnimator.SetBool("held", false); }
             if (MoveGunToSelfOnAirDrop && !localPlayer.IsPlayerGrounded())
             {
@@ -739,49 +843,25 @@ namespace SaccFlightAndVehicles
         }
         public void SFEXT_O_OnPickupUseDown()
         {
-            KeyboardInput();
+            TriggerDesktop = true;
         }
         public void SFEXT_O_OnPickupUseUp()
         {
+            TriggerDesktop = false;
             if (_HookLaunched)
-            { HookLaunched = false; RequestSerialization(); }
+            {
+                HookLaunched = false;
+                HookAttachPoint = -Vector3.zero;
+                RequestSerialization();
+            }
         }
         public void FireHook()
         {
             HookLaunched = !HookLaunched;
             RequestSerialization();
         }
-        private void FindSelf()
-        {
-            int x = 0;
-            foreach (UdonSharpBehaviour usb in EntityControl.Dial_Functions_R)
-            {
-                if (this == usb)
-                {
-                    DialPosition = x;
-                    return;
-                }
-                x++;
-            }
-            LeftDial = true;
-            x = 0;
-            foreach (UdonSharpBehaviour usb in EntityControl.Dial_Functions_L)
-            {
-                if (this == usb)
-                {
-                    DialPosition = x;
-                    return;
-                }
-                x++;
-            }
-            DialPosition = -999;
-            Debug.LogWarning("DFUNC_AAM: Can't find self in dial functions");
-        }
-        public void DFUNC_LeftDial() { UseLeftTrigger = true; }
-        public void DFUNC_RightDial() { UseLeftTrigger = false; }
         private bool TriggerLastFrame;
         private bool Selected;
-        private bool UseLeftTrigger;
         public void DFUNC_Selected()
         {
             Selected = true;
@@ -792,78 +872,156 @@ namespace SaccFlightAndVehicles
             Selected = false;
             foreach (GameObject obj in EnableOnSelect) { obj.SetActive(false); }
         }
-        private void Update()
+        private void LateUpdate()
         {
-            if (Selected)
+            if (!Selected) { return; }
+            if (DoHitPrediction)
             {
-                if (!HandHeldGunMode)
+                Vector3 playervel;
+                if (HandHeldRBMode_RB && HandHeldRBMode_RB.gameObject.activeSelf)
+                { playervel = HandHeldRBMode_RB.velocity; }
+                else
+                { playervel = localPlayer.GetVelocity(); }
+                Vector3 checkdir = ((HandHeldGunMode || (HandHeldRBMode_RB && !VehicleRB.gameObject.activeSelf) ? playervel : VehicleRB ? VehicleRB.velocity : Vector3.zero) + (HookLaunchPoint.forward * HookSpeed)).normalized;
+                Vector3 predictedhookflight = checkdir * HookRange + playervel * AprHookFlyTime;
+                float predictedflightdist = predictedhookflight.magnitude;
+                if (DisablePulling && HandHeldGunMode) { predictedflightdist -= (HookLaunchPoint.position - (localPlayer.GetPosition() + HoldHeight)).magnitude; }
+                AutoTargeting = false;
+                RaycastHit targetcheck;
+                if (Physics.Raycast(HookLaunchPoint.position, checkdir, out targetcheck, predictedflightdist, HookLayers, QueryTriggerInteraction.Ignore))
                 {
-                    float Trigger;
-                    if (UseLeftTrigger)
-                    { Trigger = Input.GetAxisRaw("Oculus_CrossPlatform_PrimaryIndexTrigger"); }
-                    else
-                    { Trigger = Input.GetAxisRaw("Oculus_CrossPlatform_SecondaryIndexTrigger"); }
-                    if (Trigger > 0.75 || Input.GetKey(KeyCode.Space))
-                    {
-                        if (!TriggerLastFrame)
-                        {
-                            FireHook();
-                        }
-                        TriggerLastFrame = true;
-                    }
-                    else { TriggerLastFrame = false; }
+                    HitPredicted = true;
+                    AutoTargeting = false;
+                    if (GrappleAnimator) { GrappleAnimator.SetBool("hitpredicted", true); }
+                    LastPredictedHitTime = Time.time;
+                    LastPredictedHitPoint = targetcheck.point;
+                    MovePredictedHitPointToTarget();
                 }
-                if (DoHitPrediction)
+                else
                 {
-                    Vector3 playervel = localPlayer.GetVelocity();
-                    Vector3 checkdir = (((HandHeldGunMode ? playervel : VehicleRB ? VehicleRB.velocity : Vector3.zero)) + (HookLaunchPoint.forward * HookSpeed)).normalized;
-                    RaycastHit targetcheck;
-                    Vector3 predictedhookflight = checkdir * HookRange + playervel * AprHookFlyTime;
-                    float predictedflightdist = predictedhookflight.magnitude;
-                    if (DisablePulling && HandHeldGunMode) { predictedflightdist -= (HookLaunchPoint.position - (localPlayer.GetPosition() + HoldHeight)).magnitude; }
-                    bool InRange = false;
-                    if (Physics.Raycast(HookLaunchPoint.position, checkdir, out targetcheck, predictedflightdist, HookLayers, QueryTriggerInteraction.Ignore))
+                    bool ObjectMoved = false;
+                    Vector3 newTargetVec = (LastPredictedHitPoint - HookLaunchPoint.position).normalized;
+
+                    RaycastHit targetcheck2;
+                    if (Physics.Raycast(HookLaunchPoint.position, newTargetVec, out targetcheck2, predictedflightdist, HookLayers, QueryTriggerInteraction.Ignore))
                     {
-                        InRange = true;
-                        if (GrappleAnimator) { GrappleAnimator.SetBool("hitpredicted", true); }
-                        if (PredictedHitPoint)
-                        {
-                            PredictedHitPoint.gameObject.SetActive(true);
-                            PredictedHitPoint.position = targetcheck.point;
-                            Vector3 eyespoint = localPlayer.GetTrackingData(VRCPlayerApi.TrackingDataType.Head).position;
-                            PredictedHitPoint.localScale = PredictedHitPointStartScale * Vector3.Distance(eyespoint, PredictedHitPoint.position);
-                        }
+                        if (Vector3.Distance(targetcheck2.point, LastPredictedHitPoint) > 0.01f)
+                        { ObjectMoved = true; }
                     }
                     else
+                    { ObjectMoved = true; }
+
+                    if (Time.time - LastPredictedHitTime > AutoTargetTime
+                    || Vector3.Angle(HookLaunchPoint.forward, newTargetVec) > AutoTargetAngle
+                    || ObjectMoved)
+                    { PredictionOff(true); }
+                    else
                     {
-                        PredictionOff();
+                        //last valid target is kept until AutoTarget_Time has passed or angle is greater than AutoTarget_Angle
+                        AutoTargeting = true;
+                        PredictionOff(false);
+                        MovePredictedHitPointToTarget();
                     }
-                    if (TargetingLaser)
+                }
+                if (TargetingLaser)
+                {
+                    if (HitPredicted)
+                    { TargetingLaser.LookAt(LastPredictedHitPoint, Vector3.up); }
+                    else
                     {
-                        if (InRange)
-                        {
-                            TargetingLaser.LookAt(PredictedHitPoint, Vector3.up);
-                        }
+                        if (AutoTargeting)
+                        { TargetingLaser.LookAt(LastPredictedHitPoint, Vector3.up); }
                         else
-                        {
-                            TargetingLaser.LookAt(TargetingLaser.position + checkdir, Vector3.up);
-                        }
+                        { TargetingLaser.LookAt(TargetingLaser.position + checkdir, Vector3.up); }
                     }
                 }
             }
         }
-        private void PredictionOff()
+        private void MovePredictedHitPointToTarget()
         {
+            if (PredictedHitPoint)
+            {
+                PredictedHitPoint.gameObject.SetActive(true);
+                PredictedHitPoint.position = LastPredictedHitPoint;
+                Vector3 eyespoint = localPlayer.GetTrackingData(VRCPlayerApi.TrackingDataType.Head).position;
+                PredictedHitPoint.localScale = PredictedHitPointStartScale * Vector3.Distance(eyespoint, LastPredictedHitPoint);
+            }
+        }
+        private void Update()
+        {
+            if (!IsOwner) { return; }
+            if (Selected)
+            {
+                if (!HandHeldGunMode)//handheld mode is done with OnPickupUseDown
+                {
+                    float Trigger;
+                    if (LeftDial)
+                    { Trigger = Input.GetAxisRaw("Oculus_CrossPlatform_PrimaryIndexTrigger"); }
+                    else
+                    { Trigger = Input.GetAxisRaw("Oculus_CrossPlatform_SecondaryIndexTrigger"); }
+                    if (Trigger > 0.75 || TriggerDesktop || Input.GetKey(KeyCode.Space))
+                    {
+                        if (!TriggerLastFrame && (!OnlyFireIfTargetPredicted || HitPredicted || AutoTargeting))
+                        {
+                            FireHook();
+                            TriggerLastFrame = true;
+                        }
+                    }
+                    else { TriggerLastFrame = false; }
+                }
+                else
+                {
+                    float Trigger;
+                    if (EntityControl.Pickup_LeftHand)
+                    { Trigger = Input.GetAxisRaw("Oculus_CrossPlatform_PrimaryIndexTrigger"); }
+                    else
+                    { Trigger = Input.GetAxisRaw("Oculus_CrossPlatform_SecondaryIndexTrigger"); }
+                    if (Trigger < 0.74 && !TriggerDesktop)
+                    {
+                        if (TriggerLastFrame)
+                        {
+                            SFEXT_O_OnPickupUseUp();
+                            TriggerLastFrame = false;
+                        }
+                    }
+                    else if (Trigger > 0.75 || TriggerDesktop)
+                    {
+                        if (!TriggerLastFrame && (!OnlyFireIfTargetPredicted || HitPredicted || AutoTargeting))
+                        {
+                            FireHook();
+                            TriggerLastFrame = true;
+                        }
+                    }
+                }
+            }
+            if (HandHeldRBMode_RB && !HandHeldRBMode_RB.gameObject.activeSelf)
+            {
+                if (HookAttached)
+                { ResetHook(); }
+            }
+        }
+        private void PredictionOff(bool Completely)
+        {
+            HitPredicted = false;
+            if (!Completely) { return; }
+            AutoTargeting = false;
             if (GrappleAnimator) { GrappleAnimator.SetBool("hitpredicted", false); }
             if (PredictedHitPoint)
             { PredictedHitPoint.gameObject.SetActive(false); }
         }
         public override void OnPlayerRespawn(VRCPlayerApi player)
         {
-            if (player.isLocal && IsOwner)
+            if (player.isLocal && _HookLaunched && HandHeldGunMode)
             {
-                if (_HookLaunched)
-                { HookLaunched = false; RequestSerialization(); }
+                HookLaunched = false;
+            }
+        }
+        private void DoEventCallbacks(string EventName)
+        {
+            if (!IsOwner) { return; }
+            for (int i = 0; i < GrappleEventCallbacks.Length; i++)
+            {
+                GrappleEventCallbacks[i].SendCustomEvent(EventName);
             }
         }
     }

@@ -11,7 +11,8 @@ namespace SaccFlightAndVehicles
     {
         public UdonSharpBehaviour SAVControl;
         public float SyncUpdateRate = .25f;
-        private bool UseLeftTrigger = false;
+        [SerializeField] KeyCode VtolUpKey = KeyCode.PageUp;
+        [SerializeField] KeyCode VtolDownKey = KeyCode.PageDown;
         [System.NonSerializedAttribute, UdonSynced] public float VTOLAngle;
         private float VTOLAngleLast;
         private float VTOLDefault;
@@ -32,18 +33,20 @@ namespace SaccFlightAndVehicles
         private float VTOLZeroPoint;
         private float VTOLAngleDivider;
         private float ThrottleSensitivity;
-        public void DFUNC_LeftDial() { UseLeftTrigger = true; }
-        public void DFUNC_RightDial() { UseLeftTrigger = false; }
+        [System.NonSerializedAttribute] public bool LeftDial = false;
+        [System.NonSerializedAttribute] public int DialPosition = -999;
+        [System.NonSerializedAttribute] public SaccEntity EntityControl;
+        [System.NonSerializedAttribute] public SAV_PassengerFunctionsController PassengerFunctionsControl;
         public void SFEXT_L_EntityStart()
         {
             VTOLDefault = (float)SAVControl.GetProgramVariable("VTOLDefaultValue");
             ControlsRoot = (Transform)SAVControl.GetProgramVariable("ControlsRoot");
             localPlayer = Networking.LocalPlayer;
             ThrottleSensitivity = (float)SAVControl.GetProgramVariable("ThrottleSensitivity");
-            InVR = (bool)SAVControl.GetProgramVariable("InVR");
+            InVR = EntityControl.InVR;
             SAVControl.SetProgramVariable("VTOLenabled", true);
             VTOL360 = (bool)SAVControl.GetProgramVariable("VTOL360");
-            IsOwner = (bool)SAVControl.GetProgramVariable("IsOwner");
+            IsOwner = EntityControl.IsOwner;
             float vtolangledif = (float)SAVControl.GetProgramVariable("VTOLMaxAngle") - (float)SAVControl.GetProgramVariable("VTOLMinAngle");
             VTOLAngleDivider = (float)SAVControl.GetProgramVariable("VTOLAngleTurnRate") / vtolangledif;
             VTOLMover = VTOLAngleLast = NewVTOLAngle = VTOLAngle = (float)SAVControl.GetProgramVariable("VTOLAngle");
@@ -51,6 +54,7 @@ namespace SaccFlightAndVehicles
         public void SFEXT_O_PilotEnter()
         {
             TriggerLastFrame = false;
+            InVR = EntityControl.InVR;
             gameObject.SetActive(true);
             VTOLMover = VTOLAngleLast = NewVTOLAngle = VTOLAngle;
             RequestSerialization();
@@ -70,6 +74,12 @@ namespace SaccFlightAndVehicles
         public void DFUNC_Deselected()
         {
             Selected = false;
+            if (UpdatingVar)
+            {
+                RequestSerialization();//make sure others recieve final position after finished adjusting
+                UpdateTime = Time.time;
+                UpdatingVar = false;
+            }
             RequestSerialization();
         }
         private void LateUpdate()
@@ -79,16 +89,17 @@ namespace SaccFlightAndVehicles
                 if (!InVR || Selected)
                 {
                     VTOLAngle = (float)SAVControl.GetProgramVariable("VTOLAngle");
-                    float pgup = Input.GetKey(KeyCode.PageUp) ? 1 : 0;
-                    float pgdn = Input.GetKey(KeyCode.PageDown) ? 1 : 0;
+                    float pgup = Input.GetKey(VtolUpKey) ? 1 : 0;
+                    float pgdn = Input.GetKey(VtolDownKey) ? 1 : 0;
                     if (pgup + pgdn != 0)
                     {
                         UpdatingKeyb = true;
-                        float NewVTOL = (float)SAVControl.GetProgramVariable("VTOLAngleInput") + ((pgdn - pgup) * (VTOLAngleDivider * Time.smoothDeltaTime));
+                        float NewVTOL = (float)SAVControl.GetProgramVariable("VTOLAngleInput") + ((pgdn - pgup) * (VTOLAngleDivider * Time.deltaTime));
                         SAVControl.SetProgramVariable("VTOLAngleInput", NewVTOL);
                     }
+                    else UpdatingKeyb = false;
                     float Trigger;
-                    if (UseLeftTrigger)
+                    if (LeftDial)
                     { Trigger = Input.GetAxisRaw("Oculus_CrossPlatform_PrimaryIndexTrigger"); }
                     else
                     { Trigger = Input.GetAxisRaw("Oculus_CrossPlatform_SecondaryIndexTrigger"); }
@@ -96,7 +107,7 @@ namespace SaccFlightAndVehicles
                     {
                         UpdatingVR = true;
                         Vector3 handpos;
-                        if (UseLeftTrigger)
+                        if (LeftDial)
                         { handpos = ControlsRoot.position - localPlayer.GetTrackingData(VRCPlayerApi.TrackingDataType.LeftHand).position; }
                         else
                         { handpos = ControlsRoot.position - localPlayer.GetTrackingData(VRCPlayerApi.TrackingDataType.RightHand).position; }
@@ -112,7 +123,7 @@ namespace SaccFlightAndVehicles
 
                         TriggerLastFrame = true;
                     }
-                    else { TriggerLastFrame = false; }
+                    else { TriggerLastFrame = false; UpdatingVR = false; }
 
                     if (UpdatingVR || UpdatingKeyb)
                     {
@@ -124,14 +135,11 @@ namespace SaccFlightAndVehicles
                         }
                         UpdatingVar = true;
                     }
-                    else
+                    else if (UpdatingVar)
                     {
-                        if (UpdatingVar)
-                        {
-                            RequestSerialization();//make sure others recieve final position after finished adjusting
-                            UpdateTime = Time.time;
-                            UpdatingVar = false;
-                        }
+                        RequestSerialization();//make sure others recieve final position after finished adjusting
+                        UpdateTime = Time.time;
+                        UpdatingVar = false;
                     }
                 }
             }
@@ -157,13 +165,13 @@ namespace SaccFlightAndVehicles
                         if (Mathf.Abs(VTOLMover - NewVTOLAngle) > .5f)
                         { NewVTOLAngle -= 1; }
                     }
-                    VTOLMover = Mathf.MoveTowards(VTOLMover, NewVTOLAngle, VTOLAngleDivider * Time.smoothDeltaTime);
+                    VTOLMover = Mathf.MoveTowards(VTOLMover, NewVTOLAngle, VTOLAngleDivider * Time.deltaTime);
                     if (VTOLMover < 0) { VTOLMover++; }
                     else if (VTOLMover > 1) { VTOLMover--; }
                 }
                 else
                 {
-                    VTOLMover = Mathf.MoveTowards(VTOLMover, NewVTOLAngle, VTOLAngleDivider * Time.smoothDeltaTime);
+                    VTOLMover = Mathf.MoveTowards(VTOLMover, NewVTOLAngle, VTOLAngleDivider * Time.deltaTime);
                 }
                 SAVControl.SetProgramVariable("VTOLAngle", VTOLMover);
             }

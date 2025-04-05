@@ -3,6 +3,7 @@ using UdonSharp;
 using UnityEngine;
 using VRC.SDKBase;
 using VRC.Udon;
+using TMPro;
 
 namespace SaccFlightAndVehicles
 {
@@ -15,7 +16,8 @@ namespace SaccFlightAndVehicles
         [Tooltip("Only play the splash particle if vehicle is faster than this. Meters/s")]
         public float PlaySplashSpeed = 7;
         public Transform[] FlatWaterEffects;
-        public UdonSharpBehaviour FloatScript;
+        public SAV_FloatScript FloatScript;
+        [System.NonSerialized] public SaccEntity EntityControl;
         [System.NonSerializedAttribute] public Animator VehicleAnimator;
         [System.NonSerializedAttribute] public float DoEffects = 999f;//don't do effects before initialized
         private float brake;
@@ -26,6 +28,7 @@ namespace SaccFlightAndVehicles
         private int FlatWaterEffectsLength;
         private float FullFuelDivider;
         private bool Occupied;
+        private bool IsOwner;
         private bool InVR;
         private bool InEditor = true;
         private int YAWINPUT_STRING = Animator.StringToHash("yawinput");
@@ -44,15 +47,19 @@ namespace SaccFlightAndVehicles
 
             VehicleAnimator = ((SaccEntity)SSVControl.GetProgramVariable("EntityControl")).GetComponent<Animator>();
             localPlayer = Networking.LocalPlayer;
+            InVR = EntityControl.InVR;
             if (localPlayer == null)
             {
                 VehicleAnimator.SetBool("occupied", true);
             }
             else { InEditor = false; }
+            IsOwner = EntityControl.IsOwner;
+            VehicleAnimator.SetBool("owner", IsOwner);
+            VehicleAnimator.SetBool("onwater", true);
 
             if (PrintAnimHashNamesOnStart)
             { PrintStringHashes(); }
-            DoEffects = 6;
+            DoEffects = 9;
             FlatWaterEffectsLength = FlatWaterEffects.Length;
             FlatWaterFXLocalSpawnPos = new Vector3[FlatWaterEffects.Length];
             for (int x = 0; x < FlatWaterEffectsLength; x++)
@@ -98,7 +105,13 @@ namespace SaccFlightAndVehicles
             VehicleAnimator.SetFloat(HEALTH_STRING, (float)SSVControl.GetProgramVariable("Health") * FullHealthDivider);
             VehicleAnimator.SetFloat(MACH10_STRING, spd * 0.000291545189504373f);//should be airspeed but nonlocal players don't have it
 
-            float watersurface = (float)FloatScript.GetProgramVariable("SurfaceHeight") + .02f;
+            if (IsOwner)
+                watersurface = FloatScript.SurfaceHeight + .02f;
+            else if (Time.time - lastSurfaceCheck > 1)
+            {
+                lastSurfaceCheck = Time.time;
+                watersurface = FloatScript.FindDepthSimple() + .02f;
+            }
 
             for (int x = 0; x < FlatWaterEffectsLength; x++)
             {
@@ -112,6 +125,8 @@ namespace SaccFlightAndVehicles
                 FlatWaterEffects[x].rotation = newrot;
             }
         }
+        float watersurface;
+        float lastSurfaceCheck;
         public void SFEXT_G_PilotEnter()
         {
             DoEffects = 0f;
@@ -125,7 +140,7 @@ namespace SaccFlightAndVehicles
         }
         public void SFEXT_O_PilotEnter()
         {
-            if (!InEditor) { InVR = localPlayer.IsUserInVR(); }
+            InVR = EntityControl.InVR;
             VehicleAnimator.SetBool("localpilot", true);
         }
         public void SFEXT_O_PilotExit()
@@ -144,7 +159,6 @@ namespace SaccFlightAndVehicles
         {
             DoEffects = 6f; //wake up if was asleep
             VehicleAnimator.SetTrigger("reappear");
-            VehicleAnimator.SetBool("dead", false);
         }
         public void SFEXT_G_AfterburnerOn()
         {
@@ -154,16 +168,12 @@ namespace SaccFlightAndVehicles
         {
             VehicleAnimator.SetBool("afterburneron", false);
         }
-        public void SFEXT_G_ReSupply()
-        {
-            VehicleAnimator.SetTrigger("resupply");
-        }
         public void SFEXT_G_BulletHit()
         {
-            WakeUp();
+            DoEffects = 0f;
             VehicleAnimator.SetTrigger("bullethit");
         }
-        public void WakeUp()
+        public void SFEXT_L_WakeUp()
         {
             DoEffects = 0f;
         }
@@ -191,12 +201,29 @@ namespace SaccFlightAndVehicles
         public void SFEXT_G_Explode()//old EffectsExplode()
         {
             VehicleAnimator.SetTrigger("explode");
-            VehicleAnimator.SetBool("dead", true);
             VehicleAnimator.SetFloat(YAWINPUT_STRING, .5f);
             VehicleAnimator.SetFloat(THROTTLE_STRING, 0);
             VehicleAnimator.SetFloat(ENGINEOUTPUT_STRING, 0);
             if (!InEditor) { VehicleAnimator.SetBool("occupied", false); }
             DoEffects = 0f;//keep awake
+        }
+        public void SFEXT_G_Dead()
+        {
+            VehicleAnimator.SetBool("dead", true);
+        }
+        public void SFEXT_G_NotDead()
+        {
+            VehicleAnimator.SetBool("dead", false);
+        }
+        public void SFEXT_O_TakeOwnership()
+        {
+            IsOwner = true;
+            VehicleAnimator.SetBool("owner", true);
+        }
+        public void SFEXT_O_LoseOwnership()
+        {
+            IsOwner = false;
+            VehicleAnimator.SetBool("owner", false);
         }
         private void PrintStringHashes()
         {

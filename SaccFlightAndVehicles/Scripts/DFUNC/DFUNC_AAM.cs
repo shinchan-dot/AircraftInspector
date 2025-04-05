@@ -1,9 +1,9 @@
-﻿
-using UdonSharp;
+﻿using UdonSharp;
 using UnityEngine;
 using UnityEngine.UI;
 using VRC.SDKBase;
 using VRC.Udon;
+using TMPro;
 
 namespace SaccFlightAndVehicles
 {
@@ -12,8 +12,12 @@ namespace SaccFlightAndVehicles
     {
         [SerializeField] public UdonSharpBehaviour SAVControl;
         public Animator AAMAnimator;
+        [Tooltip("Desktop key for firing when selected")]
+        public KeyCode FireKey = KeyCode.Space;
+        [Tooltip("If on a pickup: Use VRChat's OnPickupUseDown functionality")]
+        [SerializeField] bool use_OnPickupUseDown = false;
         [Range(0, 2)]
-        [Tooltip("0 = Radar, 1 = Heat, 2 = Other. Controls what variable is added to in SaccAirVehicle to count incoming missiles, AND which variable to check for reduced tracking, (MissilesIncomingHeat NumActiveFlares, MissilesIncomingRadar NumActiveChaff, MissilesIncomingOther NumActiveOtherCM)")]
+        [Tooltip("0 = Radar, 1 = Heat, 2 = Other. Controls what variable is added to in SaccAirVehicle to count incoming missiles, AND which variable to check for reduced tracking, (MissilesIncomingRadar NumActiveChaff, MissilesIncomingHeat NumActiveFlares, MissilesIncomingOther NumActiveOtherCM)")]
         public int MissileType = 1;
         public int NumAAM = 6;
         [Tooltip("If target is within this angle of the direction the gun is aiming, it is lockable")]
@@ -34,8 +38,11 @@ namespace SaccFlightAndVehicles
         public bool AllowFiringWhenGrounded = false;
         [Tooltip("Disable the weapon if wind is enabled, to prevent people gaining an unfair advantage")]
         public bool DisallowFireIfWind = false;
+        public bool AAMInheritVelocity = true;
         [Tooltip("Allow locking on target with no missiles left. Enable if creating FOX-1/3 missiles, otherwise your last missile will be unusable.")]
         public bool AllowNoAmmoLock = false;
+        [Tooltip("Require re-lock after firing?")]
+        public bool LoseLockWhenFired = false;
         [Tooltip("GameObject that is enabled by the missile script for 1 second when the missile enters pitbull mode to let the pilot know he no longer has to track the target. Use if creating FOX-3 missiles.")]
         public GameObject PitBullIndicator;
         [Tooltip("Send the boolean(AnimBoolName) true to the animator when selected?")]
@@ -57,7 +64,9 @@ namespace SaccFlightAndVehicles
         [Tooltip("Object that is cloned and fired at the enemy")]
         public GameObject AAM;
         public Transform AAMLaunchPoint;
-        [Tooltip("Sound that plays when missile is selected, but has no target")]
+        [Tooltip("Sound that plays when missile is fired")]
+        public AudioSource AAMLaunchSound;
+        [Tooltip("Sound that plays when missile is selected and has no target")]
         public AudioSource AAMIdle;
         [Tooltip("Sound that plays when missile is has a target but no lock")]
         public AudioSource AAMTargeting;
@@ -68,45 +77,22 @@ namespace SaccFlightAndVehicles
         [Tooltip("If not empty, targeting will be done relative to this transform's forward")]
         public Transform TargetingTransform;
         private float HighAspectPreventLockAngleDot;
-        [UdonSynced, FieldChangeCallback(nameof(AAMFire))] private ushort _AAMFire;
-        public ushort AAMFire
-        {
-            set
-            {
-                if (value > _AAMFire)//if _AAMFire is higher locally, it's because a late joiner just took ownership or value was reset, so don't launch
-                { LaunchAAM(); }
-                _AAMFire = value;
-            }
-            get => _AAMFire;
-        }
-        [UdonSynced, FieldChangeCallback(nameof(sendtargeted))] private bool _SendTargeted;
-        public bool sendtargeted
-        {
-            set
-            {
-                if (!Pilot)
-                {
-                    var Target = AAMTargets[AAMTarget];
-                    if (Target && Target.transform.parent)
-                    {
-                        AAMCurrentTargetSAVControl = Target.transform.parent.GetComponent<SaccAirVehicle>();
-                    }
-                    if (AAMCurrentTargetSAVControl != null)
-                    { AAMCurrentTargetSAVControl.EntityControl.SendEventToExtensions("SFEXT_L_AAMTargeted"); }
-                }
-                _SendTargeted = value;
-            }
-            get => _SendTargeted;
-        }
+        [UdonSynced] private bool AAMFireNow;
+        [UdonSynced] private bool SendTargeted;
+        private float SendTargeted_Time;
+        const float SENDTARGETED_INTERVAL = 1;
+        private float AAMTargetedTime = 2;
         private float boolToggleTime;
         private bool AnimOn = false;
+        [System.NonSerializedAttribute] public bool LeftDial = false;
+        [System.NonSerializedAttribute] public int DialPosition = -999;
         [System.NonSerializedAttribute] public SaccEntity EntityControl;
-        private bool UseLeftTrigger = false;
+        [System.NonSerializedAttribute] public SAV_PassengerFunctionsController PassengerFunctionsControl;
         [System.NonSerializedAttribute] public int FullAAMs;
         private int NumAAMTargets;
         private float AAMLockTimer = 0;
         private bool AAMHasTarget = false;
-        [System.NonSerializedAttribute] public bool _AAMLocked = false;
+        [System.NonSerializedAttribute, FieldChangeCallback(nameof(AAMLocked)), UdonSynced] public bool _AAMLocked = false;
         public bool AAMLocked
         {
             set
@@ -123,33 +109,30 @@ namespace SaccFlightAndVehicles
         private bool TriggerLastFrame;
         private float AAMLastFiredTime = -999;
         private float FullAAMsDivider;
-        float TimeSinceSerialization;
         private bool func_active = false;
         private bool Pilot = false;
         [System.NonSerializedAttribute] public bool IsOwner;
         [System.NonSerializedAttribute] public bool InEditor;
         private float reloadspeed;
+        private bool DoAnimFiredTrigger;
         private int NumChildrenStart;
-        private bool LeftDial = false;
-        private int DialPosition = -999;
         private VRCPlayerApi localPlayer;
-        public void DFUNC_LeftDial() { UseLeftTrigger = true; }
-        public void DFUNC_RightDial() { UseLeftTrigger = false; }
         public void SFEXT_L_EntityStart()
         {
             FullAAMs = NumAAM;
             reloadspeed = FullAAMs / FullReloadTimeSec;
             FullAAMsDivider = 1f / (NumAAM > 0 ? NumAAM : 10000000);
-            EntityControl = (SaccEntity)SAVControl.GetProgramVariable("EntityControl");
             AAMTargets = EntityControl.AAMTargets;
             NumAAMTargets = AAMTargets.Length;
             CenterOfMass = (Transform)EntityControl.CenterOfMass;
             VehicleTransform = EntityControl.transform;
-            OutsideVehicleLayer = (int)SAVControl.GetProgramVariable("OutsideVehicleLayer");
+            VehicleRigid = EntityControl.GetComponent<Rigidbody>();
+            OutsideVehicleLayer = EntityControl.OutsideVehicleLayer;
             localPlayer = Networking.LocalPlayer;
             InEditor = localPlayer == null;
             HighAspectPreventLockAngleDot = Mathf.Cos(HighAspectAngle * Mathf.Deg2Rad);
-            IsOwner = (bool)SAVControl.GetProgramVariable("IsOwner");
+            IsOwner = EntityControl.IsOwner;
+            if (AnimFiredTriggerName != string.Empty) { DoAnimFiredTrigger = true; }
 
             if (LockTimeABDivide <= 0)
             { LockTimeABDivide = 0.0001f; }
@@ -165,9 +148,9 @@ namespace SaccFlightAndVehicles
             else
             { distance_from_head = 1.333f; }
 
-            FindSelf();
-
             if (HUDText_AAM_ammo) { HUDText_AAM_ammo.text = NumAAM.ToString("F0"); }
+            if (HUDText_AAM_ammo_TMP) { HUDText_AAM_ammo_TMP.text = NumAAM.ToString("F0"); }
+            if (HUDText_AAM_ammo_TMPUGUI) { HUDText_AAM_ammo_TMPUGUI.text = NumAAM.ToString("F0"); }
 
             NumChildrenStart = transform.childCount;
             if (AAM)
@@ -205,12 +188,20 @@ namespace SaccFlightAndVehicles
             {
                 AAMCurrentTargetSAVControl = Target.transform.parent.GetComponent<SaccAirVehicle>();
             }
-            RequestSerialization();
         }
         public void SFEXT_G_PilotEnter()
-        { gameObject.SetActive(true); AAMFire = 0; }
+        {
+            OnEnableDeserializationBlocker = true;
+            SendCustomEventDelayedFrames(nameof(FireDisablerFalse), 10);
+            gameObject.SetActive(true);
+        }
+        public void FireDisablerFalse() { OnEnableDeserializationBlocker = false; }
         public void SFEXT_G_PilotExit()
-        { gameObject.SetActive(false); }
+        {
+            gameObject.SetActive(false);
+            AAMLocked = false;
+            PickupTrigger = 0;
+        }
         public void SFEXT_O_PilotExit()
         {
             Pilot = false;
@@ -227,6 +218,7 @@ namespace SaccFlightAndVehicles
                 AAMTargetIndicator.localRotation = Quaternion.identity;
             }
         }
+
         public void SFEXT_P_PassengerEnter()
         {
             if (HUDText_AAM_ammo) { HUDText_AAM_ammo.text = NumAAM.ToString("F0"); }
@@ -245,10 +237,11 @@ namespace SaccFlightAndVehicles
         public void SFEXT_G_ReSupply()
         {
             if (NumAAM != FullAAMs)
-            { SAVControl.SetProgramVariable("ReSupplied", (int)SAVControl.GetProgramVariable("ReSupplied") + 1); }
+            { EntityControl.SetProgramVariable("ReSupplied", (int)EntityControl.GetProgramVariable("ReSupplied") + 1); }
             NumAAM = (int)Mathf.Min(NumAAM + Mathf.Max(Mathf.Floor(reloadspeed), 1), FullAAMs);
             UpdateAmmoVisuals();
         }
+        public void SFEXT_G_ReArm() { SFEXT_G_ReSupply(); }
         public void UpdateAmmoVisuals()
         {
             if (AAMAnimator) { AAMAnimator.SetFloat(AnimFloatName, (float)NumAAM * FullAAMsDivider); }
@@ -264,7 +257,25 @@ namespace SaccFlightAndVehicles
         public void SFEXT_G_TouchDown()
         {
             AAMLockTimer = 0;
-            AAMTargetedTimer = 2;
+        }
+        public void SFEXT_O_OnPickup()
+        {
+            SFEXT_O_PilotEnter();
+        }
+        public void SFEXT_O_OnDrop()
+        {
+            SFEXT_O_PilotExit();
+        }
+        public void SFEXT_G_OnPickup() { SFEXT_G_PilotEnter(); }
+        public void SFEXT_G_OnDrop() { SFEXT_G_PilotExit(); }
+        private float PickupTrigger;
+        public void SFEXT_O_OnPickupUseDown()
+        {
+            PickupTrigger = 1;
+        }
+        public void SFEXT_O_OnPickupUseUp()
+        {
+            PickupTrigger = 0;
         }
         public void SFEXT_O_TakeOwnership() { IsOwner = true; }
         public void SFEXT_O_LoseOwnership() { IsOwner = false; }
@@ -282,9 +293,11 @@ namespace SaccFlightAndVehicles
             if (AAMIdle) { AAMIdle.gameObject.SetActive(false); }
             if (AAMTargeting) { AAMTargeting.gameObject.SetActive(false); }
             if (AAMTargetLock) { AAMTargetLock.gameObject.SetActive(false); }
+            PickupTrigger = 0;
             AAMLockTimer = 0;
             AAMHasTarget = false;
             AAMLocked = false;
+            RequestSerialization();
             if (AAMTargetIndicator)
             {
                 AAMTargetIndicator.localRotation = Quaternion.identity;
@@ -300,13 +313,17 @@ namespace SaccFlightAndVehicles
         {
             if (func_active)
             {
-                TimeSinceSerialization += Time.deltaTime;
                 float Trigger;
-                if (UseLeftTrigger)
-                { Trigger = Input.GetAxisRaw("Oculus_CrossPlatform_PrimaryIndexTrigger"); }
+                if (use_OnPickupUseDown)
+                    Trigger = PickupTrigger;
                 else
-                { Trigger = Input.GetAxisRaw("Oculus_CrossPlatform_SecondaryIndexTrigger"); }
-
+                {
+                    if (LeftDial)
+                    { Trigger = Input.GetAxisRaw("Oculus_CrossPlatform_PrimaryIndexTrigger"); }
+                    else
+                    { Trigger = Input.GetAxisRaw("Oculus_CrossPlatform_SecondaryIndexTrigger"); }
+                }
+                bool lockedLast = AAMLocked;
                 if (NumAAMTargets != 0)
                 {
                     if (MissileType == 1)//heatseekers check engine output of target
@@ -326,24 +343,19 @@ namespace SaccFlightAndVehicles
                         if (AAMLockTimer > AAMLockTime && AAMHasTarget) { AAMLocked = true; }
                         else { AAMLocked = false; }
                     }
+                    if (lockedLast != AAMLocked) { RequestSerialization(); }
 
                     //firing AAM
-                    if (Trigger > 0.75 || (Input.GetKey(KeyCode.Space)))
+                    if (Trigger > 0.75 || Input.GetKey(FireKey))
                     {
                         if (!TriggerLastFrame)
                         {
-                            if (DisallowFireIfWind)
+                            if (DisallowFireIfWind && SAVControl)
                             {
-                                if (((Vector3)SAVControl.GetProgramVariable("FinalWind")).magnitude > 0f)
+                                if (((Vector3)SAVControl.GetProgramVariable("FinalWind")).sqrMagnitude > 0f)
                                 { return; }
                             }
-                            if (NumAAM > 0 && AAMLocked && Time.time - AAMLastFiredTime > AAMLaunchDelay)
-                            {
-                                AAMFire++;//launch AAM using set
-                                RequestSerialization();
-                                if (NumAAM == 0 && !AllowNoAmmoLock) { AAMLockTimer = 0; AAMLocked = false; }
-                                EntityControl.SendEventToExtensions("SFEXT_O_AAMLaunch");
-                            }
+                            LaunchAAM_Owner();
                         }
                         TriggerLastFrame = true;
                     }
@@ -383,10 +395,10 @@ namespace SaccFlightAndVehicles
         private int AAMTargetChecker = 0;
         [System.NonSerializedAttribute] public Transform CenterOfMass;
         private Transform VehicleTransform;
+        private Rigidbody VehicleRigid;
         private SaccAirVehicle AAMCurrentTargetSAVControl;
         private int OutsideVehicleLayer;
         private Vector3 AAMCurrentTargetDirection;
-        private float AAMTargetedTimer = 2;
         private float AAMTargetObscuredDelay;
         //public Transform TARGETDEBUG;
         /* everywhere that GetComponent<SaccAirVehicle>() is used should be changed to UdonSharpBehaviour for modularity's sake,
@@ -423,8 +435,13 @@ namespace SaccFlightAndVehicles
                     {
                         RaycastHit hitnext;
                         //raycast to check if it's behind something
-                        bool LineOfSightNext = Physics.Raycast(HudControlPosition, AAMNextTargetDirection, out hitnext, 99999999, 133137 /* Default, Water, Environment, and Walkthrough */, QueryTriggerInteraction.Collide);
-
+                        bool LineOfSightNext = Physics.Raycast(HudControlPosition, AAMNextTargetDirection, out hitnext, Mathf.Infinity, 133137 /* Default, Water, Environment, and Walkthrough */, QueryTriggerInteraction.Collide);
+#if UNITY_EDITOR
+                        if (hitnext.collider)
+                            Debug.DrawLine(HudControlPosition, hitnext.point, Color.red);
+                        else
+                            Debug.DrawRay(HudControlPosition, AAMNextTargetDirection, Color.yellow);
+#endif
                         /*                         Debug.Log(string.Concat("LoS_next ", LineOfSightNext));
                                                 if (hitnext.collider)
                                                 {
@@ -440,10 +457,12 @@ namespace SaccFlightAndVehicles
                                 && NextTargetAngle < AAMLockAngle
                                     && NextTargetAngle < AAMCurrentTargetAngle
                                         && NextTargetDistance < AAMMaxTargetDistance
-                                            && (!HighAspectPreventLock || !NextTargetSAVControl || Vector3.Dot(NextTargetSAVControl.VehicleTransform.forward, AAMNextTargetDirection.normalized) > HighAspectPreventLockAngleDot)
+                                            && (!NextTargetSAVControl ||//null check
+                                                ((!HighAspectPreventLock || Vector3.Dot(NextTargetSAVControl.VehicleTransform.forward, AAMNextTargetDirection.normalized) > HighAspectPreventLockAngleDot)
+                                                && (MissileType != 1 || NextTargetSAVControl._EngineOn)))
                                             || (AAMCurrentTargetSAVControl &&//null check
                                                                         (AAMCurrentTargetSAVControl.Taxiing ||//switch target if current target is taxiing
-                                                                        (MissileType == 0 && !AAMCurrentTargetSAVControl._EngineOn)))//switch target if heatseeker and current target's engine is off
+                                                                        (MissileType == 1 && !AAMCurrentTargetSAVControl._EngineOn && !AAMCurrentTargetSAVControl.EntityControl.wrecked)))//switch target if heatseeker and current target's engine is off unless target is wrecked(on fire)
                                                 || !AAMTargets[AAMTarget].activeInHierarchy//switch target if current target is destroyed
                                                 )
                         {
@@ -455,7 +474,6 @@ namespace SaccFlightAndVehicles
                                 AAMCurrentTargetPosition = AAMTargets[AAMTarget].transform.position;
                                 AAMCurrentTargetSAVControl = NextTargetSAVControl;
                                 AAMLockTimer = 0;
-                                AAMTargetedTimer = .99f;//don't send targeted this frame incase new target is found next frame
                             }
                         }
                     }
@@ -476,20 +494,27 @@ namespace SaccFlightAndVehicles
                 //check if target is active, and if it's SaccAirVehicle is null(dummy target), or if it's not null(plane) make sure it's not taxiing or dead.
                 //raycast to check if it's behind something
                 RaycastHit hitcurrent;
-                bool LineOfSightCur = Physics.Raycast(HudControlPosition, AAMCurrentTargetDirection, out hitcurrent, 99999999, 133137 /* Default, Water, Environment, and Walkthrough */, QueryTriggerInteraction.Collide);
+                bool LineOfSightCur = Physics.Raycast(HudControlPosition, AAMCurrentTargetDirection, out hitcurrent, Mathf.Infinity, 133137 /* Default, Water, Environment, and Walkthrough */, QueryTriggerInteraction.Collide);
+#if UNITY_EDITOR
+                if (hitcurrent.collider)
+                    Debug.DrawLine(HudControlPosition, hitcurrent.point, Color.green);
+                else
+                    Debug.DrawRay(HudControlPosition, AAMNextTargetDirection, Color.blue);
+#endif
                 //used to make lock remain for .25 seconds after target is obscured
                 if (!LineOfSightCur || (hitcurrent.collider && hitcurrent.collider.gameObject.layer != OutsideVehicleLayer))
                 { AAMTargetObscuredDelay += DeltaTime; }
                 else
                 { AAMTargetObscuredDelay = 0; }
 
-                if ((!(bool)SAVControl.GetProgramVariable("Taxiing") || AllowFiringWhenGrounded)
+                if (
+                    (!SAVControl || !(bool)SAVControl.GetProgramVariable("Taxiing") || AllowFiringWhenGrounded)
                     && (AAMTargetObscuredDelay < .25f)
                         && AAMCurrentTargetDistance < AAMMaxTargetDistance
                             && AAMTargets[AAMTarget].activeInHierarchy
                                 && (!AAMCurrentTargetSAVControl ||
                                     (!AAMCurrentTargetSAVControl.Taxiing && !AAMCurrentTargetSAVControl.EntityControl._dead &&
-                                        (MissileType != 0 || AAMCurrentTargetSAVControl._EngineOn)))//heatseekers cant lock if engine off
+                                        (MissileType != 1 || (AAMCurrentTargetSAVControl._EngineOn || AAMCurrentTargetSAVControl.EntityControl.wrecked))))//heatseekers cant lock if engine off unless wrecked (on fire)
                                     &&
                                         (!HighAspectPreventLock || !AAMCurrentTargetSAVControl || Vector3.Dot(AAMCurrentTargetSAVControl.VehicleTransform.forward, AAMCurrentTargetDirection.normalized) > HighAspectPreventLockAngleDot)
                                         )
@@ -503,25 +528,24 @@ namespace SaccFlightAndVehicles
                             if (AAMCurrentTargetSAVControl)
                             {
                                 //target is a plane, send the 'targeted' event every second to make the target plane play a warning sound in the cockpit.
-                                if (SendLockWarning && AAMTargetedTimer > 1)
+                                if (SendLockWarning && Time.time - AAMTargetedTime > SENDTARGETED_INTERVAL)
                                 {
-                                    sendtargeted = !sendtargeted;
+                                    SendTargeted_Time = Time.time;
                                     RequestSerialization();
-                                    AAMTargetedTimer = 0;
+                                    AAMTargetedTime = Time.time;
                                 }
-                                AAMTargetedTimer += DeltaTime;
                             }
                         }
                         else
                         {
-                            AAMTargetedTimer = 2f;
+                            AAMTargetedTime = 0;
                             AAMLockTimer = 0;
                         }
                     }
                 }
                 else
                 {
-                    AAMTargetedTimer = 2f;
+                    AAMTargetedTime = 0f;
                     AAMLockTimer = 0;
                     AAMHasTarget = false;
                 }
@@ -543,6 +567,8 @@ namespace SaccFlightAndVehicles
 
         //hud stuff
         public Text HUDText_AAM_ammo;
+        public TextMeshPro HUDText_AAM_ammo_TMP;
+        public TextMeshProUGUI HUDText_AAM_ammo_TMPUGUI;
         [Tooltip("Hud element to highlight current target")]
         public Transform AAMTargetIndicator;
         private float distance_from_head;
@@ -556,13 +582,14 @@ namespace SaccFlightAndVehicles
                     AAMTargetIndicator.localScale = Vector3.one;
                     AAMTargetIndicator.position = (HUDControl ? HUDControl.transform.position : localPlayer.GetTrackingData(VRCPlayerApi.TrackingDataType.Head).position) + AAMCurrentTargetDirection;
                     AAMTargetIndicator.localPosition = AAMTargetIndicator.localPosition.normalized * distance_from_head;
+                    Vector3 HudControlPosition = HUDControl ? HUDControl.transform.position : localPlayer.GetTrackingData(VRCPlayerApi.TrackingDataType.Head).position;
                     if (AAMLocked)
                     {
-                        AAMTargetIndicator.rotation = Quaternion.LookRotation(-(AAMTargetIndicator.position - HUDControl.transform.position), VehicleTransform.transform.up);//This makes it not stretch when off to the side by fixing the rotation.
+                        AAMTargetIndicator.rotation = Quaternion.LookRotation(-(AAMTargetIndicator.position - HudControlPosition), VehicleTransform.transform.up);//This makes it not stretch when off to the side by fixing the rotation.
                     }
                     else
                     {
-                        AAMTargetIndicator.rotation = Quaternion.LookRotation(AAMTargetIndicator.position - HUDControl.transform.position, VehicleTransform.transform.up);//This makes it not stretch when off to the side by fixing the rotation.
+                        AAMTargetIndicator.rotation = Quaternion.LookRotation(AAMTargetIndicator.position - HudControlPosition, VehicleTransform.transform.up);//This makes it not stretch when off to the side by fixing the rotation.
                     }
                 }
                 else AAMTargetIndicator.localScale = Vector3.zero;
@@ -571,9 +598,10 @@ namespace SaccFlightAndVehicles
         }
         public void LaunchAAM()
         {
+            if (AAMLaunchSound) { AAMLaunchSound.PlayOneShot(AAMLaunchSound.clip); }
             AAMLastFiredTime = Time.time;
             if (NumAAM > 0) { NumAAM--; }//so it doesn't go below 0 when desync occurs
-            if (AAMAnimator) { AAMAnimator.SetTrigger(AnimFiredTriggerName); }
+            if (AAMAnimator && DoAnimFiredTrigger) { AAMAnimator.SetTrigger(AnimFiredTriggerName); }
             if (AAM)
             {
                 GameObject NewAAM;
@@ -584,36 +612,41 @@ namespace SaccFlightAndVehicles
                 if (WorldParent) { NewAAM.transform.SetParent(WorldParent); }
                 else { NewAAM.transform.SetParent(null); }
                 NewAAM.transform.SetPositionAndRotation(AAMLaunchPoint.position, AAMLaunchPoint.transform.rotation);
+                Rigidbody AAMRB = NewAAM.GetComponent<Rigidbody>();
+                if (AAMRB)
+                {
+                    if (EntityControl.IsOwner && IsOwner)// these can be different for passenger functions      
+                    {
+                        //set launch position relative to rigidbody instead of transform so the physics matches
+                        Vector3 LocalLaunchPoint = EntityControl.transform.InverseTransformDirection(NewAAM.transform.position - EntityControl.transform.position);
+                        AAMRB.position = (VehicleRigid.rotation * LocalLaunchPoint) + VehicleRigid.position;
+                        Quaternion WeaponRotDif = NewAAM.transform.rotation * Quaternion.Inverse(VehicleRigid.rotation);
+                        AAMRB.rotation = WeaponRotDif * VehicleRigid.rotation;
+                    }
+                    else
+                    {
+                        Vector3 aamrbpos = NewAAM.transform.position;
+                        if (SAVControl) { aamrbpos += (Vector3)SAVControl.GetProgramVariable("CurrentVel") * Time.deltaTime; }
+                        AAMRB.position = aamrbpos;
+                        AAMRB.rotation = NewAAM.transform.rotation;
+                    }
+                }
                 NewAAM.SetActive(true);
-                NewAAM.GetComponent<Rigidbody>().velocity = (Vector3)SAVControl.GetProgramVariable("CurrentVel");
+                if (AAMInheritVelocity)
+                {
+                    if (AAMRB)
+                    {
+                        if (SAVControl)
+                        { AAMRB.velocity = (Vector3)SAVControl.GetProgramVariable("CurrentVel"); }
+                        else
+                        { AAMRB.velocity = VehicleRigid.velocity; }
+                    }
+                }
+                UdonSharpBehaviour USB = NewAAM.GetComponent<UdonSharpBehaviour>();
+                if (USB)
+                { USB.SendCustomEvent("EnableWeapon"); }
             }
             UpdateAmmoVisuals();
-        }
-        private void FindSelf()
-        {
-            int x = 0;
-            foreach (UdonSharpBehaviour usb in EntityControl.Dial_Functions_R)
-            {
-                if (this == usb)
-                {
-                    DialPosition = x;
-                    return;
-                }
-                x++;
-            }
-            LeftDial = true;
-            x = 0;
-            foreach (UdonSharpBehaviour usb in EntityControl.Dial_Functions_L)
-            {
-                if (this == usb)
-                {
-                    DialPosition = x;
-                    return;
-                }
-                x++;
-            }
-            DialPosition = -999;
-            Debug.LogWarning("DFUNC_AAM: Can't find self in dial functions");
         }
         public void SetBoolOn()
         {
@@ -629,19 +662,58 @@ namespace SaccFlightAndVehicles
         }
         public void KeyboardInput()
         {
-            if (LeftDial)
+            if (PassengerFunctionsControl)
             {
-                if (EntityControl.LStickSelection == DialPosition)
-                { EntityControl.LStickSelection = -1; }
-                else
-                { EntityControl.LStickSelection = DialPosition; }
+                if (LeftDial) PassengerFunctionsControl.ToggleStickSelectionLeft(this);
+                else PassengerFunctionsControl.ToggleStickSelectionRight(this);
             }
             else
             {
-                if (EntityControl.RStickSelection == DialPosition)
-                { EntityControl.RStickSelection = -1; }
-                else
-                { EntityControl.RStickSelection = DialPosition; }
+                if (LeftDial) EntityControl.ToggleStickSelectionLeft(this);
+                else EntityControl.ToggleStickSelectionRight(this);
+            }
+        }
+        private void LaunchAAM_Owner()
+        {
+            if (NumAAM > 0 && AAMLocked && Time.time - AAMLastFiredTime > AAMLaunchDelay)
+            {
+                FireNextSerialization = true;
+                RequestSerialization();
+                LaunchAAM();
+                if (LoseLockWhenFired || (NumAAM == 0 && !AllowNoAmmoLock)) { AAMLockTimer = 0; AAMLocked = false; RequestSerialization(); }
+                EntityControl.SendEventToExtensions("SFEXT_O_AAMLaunch");
+            }
+        }
+        private bool FireNextSerialization = false;
+        public override void OnPreSerialization()
+        {
+            if (FireNextSerialization)
+            {
+                FireNextSerialization = false;
+                AAMFireNow = true;
+            }
+            else { AAMFireNow = false; }
+            if (Time.time - SendTargeted_Time < SENDTARGETED_INTERVAL)
+            { SendTargeted = true; }
+            else { SendTargeted = false; }
+        }
+        bool OnEnableDeserializationBlocker;
+        public override void OnDeserialization()
+        {
+            if (OnEnableDeserializationBlocker) { return; }
+            if (AAMFireNow) { LaunchAAM(); }
+            if (SendTargeted)
+            {
+                if (!Pilot)
+                {
+                    var Target = AAMTargets[AAMTarget];
+                    if (Target && Target.transform.parent)
+                    {
+                        AAMCurrentTargetSAVControl = Target.transform.parent.GetComponent<SaccAirVehicle>();
+                    }
+                    if (AAMCurrentTargetSAVControl != null && AAMCurrentTargetSAVControl.EntityControl.InVehicle)
+                    { AAMCurrentTargetSAVControl.EntityControl.SendEventToExtensions("SFEXT_L_AAMTargeted"); }
+                }
             }
         }
     }

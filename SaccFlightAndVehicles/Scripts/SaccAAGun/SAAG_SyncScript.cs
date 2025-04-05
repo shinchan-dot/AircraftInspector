@@ -56,6 +56,7 @@ namespace SaccFlightAndVehicles
         private float UpAngleMax = 89;
         private float DownAngleMax = 35;
         private Quaternion RotatorStartRot;
+        [System.NonSerialized] public SaccEntity EntityControl;
         private void Start()
         {
             if (!Initialized)//shouldn't be active until entitystart
@@ -66,7 +67,7 @@ namespace SaccFlightAndVehicles
             Initialized = true;
             localPlayer = Networking.LocalPlayer;
             bool InEditor = localPlayer == null;
-            if (!InEditor && localPlayer.isMaster)
+            if (!InEditor && EntityControl.IsOwner)
             { IsOwner = true; }
             else if (!InEditor) { IsOwner = false; }//late joiner
             else { IsOwner = true; }//play mode in editor
@@ -132,12 +133,12 @@ namespace SaccFlightAndVehicles
                     Vector3 OldPredictedRotation_3 = new Vector3(OldPredictedRotation.x, OldPredictedRotation.y, 0);
 
                     Vector3 TargetRot = Vector3.Lerp(OldPredictedRotation_3, PredictedRotation_3, TimeSinceUpdate * SmoothingTimeDivider);
-                    // NonOwnerRotLerper = Vector3.Lerp(NonOwnerRotLerper, TargetRot, Time.smoothDeltaTime * 10);
+                    // NonOwnerRotLerper = Vector3.Lerp(NonOwnerRotLerper, TargetRot, Time.deltaTime * 10);
                     Rotator.localRotation = Quaternion.Euler(TargetRot);
                 }
                 else
                 {
-                    // NonOwnerRotLerper = Vector3.Lerp(NonOwnerRotLerper, PredictedRotation_3, Time.smoothDeltaTime * 10);
+                    // NonOwnerRotLerper = Vector3.Lerp(NonOwnerRotLerper, PredictedRotation_3, Time.deltaTime * 10);
                     Rotator.localRotation = Quaternion.Euler(PredictedRotation_3);
                 }
             }
