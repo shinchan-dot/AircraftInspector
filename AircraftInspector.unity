@@ -256,7 +256,7 @@ GameObject:
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
   m_StaticEditorFlags: 0
-  m_IsActive: 0
+  m_IsActive: 1
 --- !u!4 &37266977
 Transform:
   m_ObjectHideFlags: 0
@@ -18103,7 +18103,6 @@ MonoBehaviour:
   InputParent: {fileID: 8307113784740082014}
   ValueTextParent: {fileID: 8307113784875804217}
   AircraftInspectorUB: {fileID: 8307113783881257971}
-  TestInputField: {fileID: 0}
 --- !u!4 &1248175259
 Transform:
   m_ObjectHideFlags: 0

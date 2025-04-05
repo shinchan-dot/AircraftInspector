@@ -26,15 +26,6 @@ namespace SaccFlightAndVehicles
 
         private AircraftInspector AirclaftInspector;
         private Type AirclaftInspectorType;
-        public InputField TestInputField;
-
-        [ContextMenu("TEST")]
-        public void Test()
-        {
-            FieldInfo field = AirclaftInspectorType.GetField("GroundDetectorRayDistanceInputField");
-            field.SetValue(AirclaftInspector, TestInputField);
-        }
-
 
         [ContextMenu("PUT_OBJECTS")]
         public void PutObjects()
